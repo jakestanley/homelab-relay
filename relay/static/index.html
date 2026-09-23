@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stream relay</title>
+<style>
+  :root {
+    --bg: #f6f6f4; --fg: #1d1d1b; --muted: #6b6b66; --card: #ffffff; --line: #e2e2dc;
+    --ok: #1a7f37; --warn: #9a6700; --bad: #cf222e; --idle: #57606a; --off: #8c959f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #151514; --fg: #ececea; --muted: #9b9b95; --card: #1f1f1d; --line: #33332f;
+      --ok: #3fb950; --warn: #d29922; --bad: #f85149; --idle: #8b949e; --off: #6e7681;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 820px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 18px; margin: 0 0 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+          padding: 14px 16px; margin-bottom: 14px; }
+  .ingest { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .big { font-size: 22px; font-weight: 650; }
+  .muted { color: var(--muted); font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px 6px; border-top: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 12px; color: var(--muted); font-weight: 600; border-top: 0; }
+  td.dest { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
+            color: var(--muted); word-break: break-all; }
+  .badge { display: inline-block; min-width: 88px; padding: 2px 8px; border-radius: 999px;
+           font-size: 12px; font-weight: 650; text-align: center; color: #fff; }
+  .s-connected, .s-live, .s-recording { background: var(--ok); }
+  .s-connecting { background: var(--warn); }
+  .s-failed, .s-unknown, .s-unreachable { background: var(--bad); }
+  .s-idle, .s-no_ingest { background: var(--idle); }
+  .s-disabled { background: var(--off); }
+  .warn { color: var(--bad); font-weight: 600; }
+  @media (max-width: 560px) { td.dest, th.dest { display: none; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Stream relay</h1>
+
+  <section class="card ingest">
+    <span id="ingest-badge" class="badge s-unknown">…</span>
+    <span id="ingest-text" class="big">Loading</span>
+    <span id="ingest-detail" class="muted"></span>
+  </section>
+
+  <section class="card">
+    <table>
+      <thead><tr><th>Output</th><th>State</th><th>Detail</th><th class="dest">Destination</th></tr></thead>
+      <tbody id="outputs"></tbody>
+    </table>
+  </section>
+
+  <section class="card">
+    <table>
+      <thead><tr><th>Recording</th><th>State</th><th>Detail</th></tr></thead>
+      <tbody id="recording"></tbody>
+    </table>
+    <p id="storage" class="muted"></p>
+  </section>
+
+  <p class="muted">Idle means waiting for ingest, which is normal before a broadcast. Updated
+    <span id="updated">never</span>. Refreshes every 2 seconds.</p>
+</main>
+<script>
+  const INGEST_TEXT = { live: "Ingest live", no_ingest: "No ingest", unknown: "RTMP server unreachable" };
+  const RECORD_LABEL = { connected: "recording", connecting: "connecting" };
+
+  function el(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined && text !== null) e.textContent = text;
+    return e;
+  }
+  function badge(state, label) { return el("span", "badge s-" + state, label || state); }
+  function bytes(n) {
+    if (!n) return "0 B";
+    const u = ["B", "KB", "MB", "GB", "TB"];
+    const i = Math.min(Math.floor(Math.log(n) / Math.log(1024)), u.length - 1);
+    return (n / Math.pow(1024, i)).toFixed(i ? 1 : 0) + " " + u[i];
+  }
+  function row(cells) {
+    const tr = el("tr");
+    cells.forEach(c => { const td = el("td", c.cls); td.append(c.node || c.text || ""); tr.append(td); });
+    return tr;
+  }
+
+  function render(s) {
+    const ing = s.ingest;
+    const ib = document.getElementById("ingest-badge");
+    ib.className = "badge s-" + ing.state;
+    ib.textContent = ing.state.replace("_", " ");
+    document.getElementById("ingest-text").textContent = INGEST_TEXT[ing.state] || ing.state;
+    let d = ing.detail || "";
+    if (ing.state === "live") {
+      d = "since " + ing.since + " · " + (ing.tracks || []).join(", ") + " · " + bytes(ing.bytes_received);
+    } else if (ing.gap_started) {
+      d = "gap since " + ing.gap_started;
+    }
+    if (ing.last_gap) d += " · last gap " + ing.last_gap.duration_seconds + "s ending " + ing.last_gap.end;
+    document.getElementById("ingest-detail").textContent = d;
+
+    const outs = document.getElementById("outputs");
+    outs.replaceChildren(...s.outputs.map(o => row([
+      { text: o.name },
+      { node: badge(o.state) },
+      { text: o.state === "connected" ? o.detail + " · " + bytes(o.bytes) : o.detail },
+      { text: o.destination || "", cls: "dest" },
+    ])));
+
+    const r = s.recording;
+    const rstate = r.state === "connected" ? "recording" : r.state;
+    document.getElementById("recording").replaceChildren(row([
+      { text: r.file || "archive" },
+      { node: badge(rstate, RECORD_LABEL[r.state] || r.state) },
+      { text: r.state === "connected" ? bytes(r.bytes) + " written" : r.detail },
+    ]));
+
+    const st = s.storage, sp = document.getElementById("storage");
+    sp.replaceChildren();
+    if (!st) {
+      sp.textContent = "No storage root configured.";
+    } else if (st.error) {
+      sp.append(el("span", "warn", "Storage unreadable: " + st.error));
+    } else {
+      sp.append(bytes(st.free_bytes) + " free of " + bytes(st.total_bytes) + " at " + st.path + ". ");
+      if (st.threshold_breached) {
+        sp.append(el("span", "warn", "Below the " + bytes(st.min_free_bytes) + " free-space threshold."));
+      }
+    }
+    document.getElementById("updated").textContent = new Date(s.generated_at).toLocaleTimeString();
+  }
+
+  async function tick() {
+    try {
+      const res = await fetch("api/status");
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      render(await res.json());
+    } catch (e) {
+      const ib = document.getElementById("ingest-badge");
+      ib.className = "badge s-unreachable";
+      ib.textContent = "unreachable";
+      document.getElementById("ingest-text").textContent = "Status service unreachable";
+      document.getElementById("ingest-detail").textContent = String(e);
+    }
+  }
+  tick();
+  setInterval(tick, 2000);
+</script>
+</body>
+</html>

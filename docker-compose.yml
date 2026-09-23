@@ -1,0 +1,153 @@
+# homelab-relay: one RTMP ingest, fanned out to several platforms.
+#
+# Shape (see README.md):
+#   mediamtx      ingest only, on the RTMP port
+#   out-*         one long-running wrapper + ffmpeg per output slot
+#   recorder      the same wrapper, writing the archive instead of pushing
+#   status        read-only status page and ingest gap log
+#
+# Supervision: every service is its own container with `restart: always`.
+# Docker restarts a crashed wrapper; the wrapper itself re-runs ffmpeg
+# whenever it exits, so an output failing never exits a container.
+#
+# The project name is fixed so a deploy from any clone path manages the same
+# containers (PATTERNS/checkout-topology.md).
+name: homelab-relay
+
+# One image for the wrappers, recorder and status glue. Only `status` builds
+# it: several services building the same tag produce a different image ID on
+# every run, which makes `up.sh` recreate every output even when nothing
+# changed -- an interruption on every re-run.
+x-relay-image: &relay-image
+  image: homelab-relay:local
+  pull_policy: never
+  restart: always
+  user: "${RELAY_UID:-1000}:${RELAY_GID:-1000}"
+
+x-consumer-env: &consumer-env
+  RELAY_API_URL: http://mediamtx:9997
+  RELAY_INGEST_PATH: live/${INGEST_KEY:?INGEST_KEY must be set in .env}
+  RELAY_SOURCE_URL: rtmp://mediamtx:1935/live/${INGEST_KEY:?INGEST_KEY must be set in .env}
+  RELAY_STATE_DIR: /state
+  OUTPUT_IO_TIMEOUT: ${OUTPUT_IO_TIMEOUT:-10}
+
+x-output: &output
+  <<: *relay-image
+  command: ["python", "-m", "relay.output"]
+  volumes:
+    - state:/state
+
+services:
+  mediamtx:
+    build: ./mediamtx
+    image: homelab-relay-mediamtx:local
+    restart: always
+    ports:
+      # Declared in homelab-infra registry.yaml as a native port of
+      # stream-relay. Straight to this process; never proxied.
+      - "${RTMP_PORT:-1935}:1935"
+    environment:
+      # See mediamtx/mediamtx.yml: the one path a publisher may use.
+      MTX_AUTHINTERNALUSERS_0_PERMISSIONS_0_PATH: live/${INGEST_KEY:?INGEST_KEY must be set in .env}
+
+  # --- Platform outputs: disabled when the URL or the key is empty. ---------
+
+  out-twitch:
+    <<: *output
+    environment:
+      <<: *consumer-env
+      OUTPUT_NAME: twitch
+      OUTPUT_URL: ${TWITCH_URL:-}
+      OUTPUT_KEY: ${STREAM_KEY_TWITCH:-}
+      OUTPUT_KEY_REQUIRED: "true"
+
+  out-youtube:
+    <<: *output
+    environment:
+      <<: *consumer-env
+      OUTPUT_NAME: youtube
+      OUTPUT_URL: ${YOUTUBE_URL:-}
+      OUTPUT_KEY: ${STREAM_KEY_YOUTUBE:-}
+      OUTPUT_KEY_REQUIRED: "true"
+
+  out-facebook:
+    <<: *output
+    environment:
+      <<: *consumer-env
+      OUTPUT_NAME: facebook
+      OUTPUT_URL: ${FACEBOOK_URL:-}
+      OUTPUT_KEY: ${STREAM_KEY_FACEBOOK:-}
+      OUTPUT_KEY_REQUIRED: "true"
+
+  # --- Test sink outputs: disabled when the URL is empty (the default). ---
+
+  out-sink-a:
+    <<: *output
+    environment:
+      <<: *consumer-env
+      OUTPUT_NAME: sink-a
+      OUTPUT_URL: ${SINK_A_URL:-}
+      OUTPUT_TLS_VERIFY: ${SINK_A_TLS_VERIFY:-true}
+
+  out-sink-b:
+    <<: *output
+    environment:
+      <<: *consumer-env
+      OUTPUT_NAME: sink-b
+      OUTPUT_URL: ${SINK_B_URL:-}
+      OUTPUT_TLS_VERIFY: ${SINK_B_TLS_VERIFY:-true}
+
+  # --- Archive ---------------------------------------------------------------
+
+  recorder:
+    <<: *output
+    volumes:
+      - state:/state
+      - ${RECORD_DIR:?RECORD_DIR must be set in .env}:/recordings
+    environment:
+      <<: *consumer-env
+      OUTPUT_NAME: recorder
+      OUTPUT_KIND: record
+      RECORD_DIR: /recordings
+
+  # --- Status page (registry HTTP port) ---------------------------------------
+
+  status:
+    <<: *relay-image
+    build: .
+    pull_policy: build
+    command: ["python", "-m", "relay.status"]
+    ports:
+      - "${SERVICE_PORT:-20040}:${SERVICE_PORT:-20040}"
+    volumes:
+      - state:/state:ro
+      - ${RECORD_DIR:?RECORD_DIR must be set in .env}:/recordings
+    environment:
+      SERVICE_PORT: ${SERVICE_PORT:-20040}
+      RELAY_API_URL: http://mediamtx:9997
+      RELAY_INGEST_PATH: live/${INGEST_KEY:?INGEST_KEY must be set in .env}
+      RELAY_STATE_DIR: /state
+      RELAY_OUTPUTS: twitch,youtube,facebook,sink-a,sink-b
+      RECORD_DIR: /recordings
+      RECORD_DIR_LABEL: ${RECORD_DIR}
+      RECORD_MIN_FREE_GB: ${RECORD_MIN_FREE_GB:-20}
+
+  # --- Local test sinks: `docker compose --profile sinks up -d` -------------
+  # Not started by scripts/up.sh. Published on localhost only, for ffprobe.
+
+  sink-a:
+    profiles: [sinks]
+    build: ./test/sink
+    image: homelab-relay-sink:local
+    ports:
+      - "127.0.0.1:19351:1935"
+
+  sink-b:
+    profiles: [sinks]
+    build: ./test/sink
+    image: homelab-relay-sink:local
+    ports:
+      - "127.0.0.1:19352:1935"
+
+volumes:
+  state:

@@ -1,0 +1,42 @@
+# MediaMTX handles ingest only. Fan-out and recording are separate consumer
+# processes (see docker-compose.yml), so nothing here pushes or records.
+
+logLevel: info
+logDestinations: [stdout]
+
+# Ingest is RTMP only. Every other protocol is off.
+rtmp: true
+rtmpAddress: :1935
+rtmpEncryption: "no"
+rtsp: false
+hls: false
+webrtc: false
+srt: false
+moq: false
+
+# Consumers and the status glue poll this to see whether ingest is live.
+# Reachable only on the compose network; its port is not published.
+api: true
+apiAddress: :9997
+
+authMethod: internal
+authInternalUsers:
+  - user: any
+    pass:
+    ips: []
+    permissions:
+      # Publishing is allowed on exactly one path: live/<INGEST_KEY>. OBS
+      # sends server rtmp://adler.stanley.arpa/live plus the key, so the key
+      # is the last path segment and a wrong key is rejected.
+      #
+      # MediaMTX does not expand variables in this file, so the real value
+      # comes from MTX_AUTHINTERNALUSERS_0_PERMISSIONS_0_PATH (set in
+      # docker-compose.yml from INGEST_KEY). The index is positional: keep
+      # this entry first in this list, and this list first in the users.
+      - action: publish
+        path: live/unset-ingest-key-see-docker-compose
+      - action: read
+      - action: api
+
+paths:
+  all_others:

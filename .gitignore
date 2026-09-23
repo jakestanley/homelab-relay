@@ -1,0 +1,6 @@
+imported/
+.env
+.env.*
+!.env.example
+__pycache__/
+.claude/settings.local.json

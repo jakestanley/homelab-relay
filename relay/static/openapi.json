@@ -1,0 +1,297 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "homelab-relay status",
+    "version": "1.0.0",
+    "description": "Read-only status of the RTMP relay. No authentication: LAN only, served as plain HTTP behind the homelab nginx, which terminates TLS. No endpoint exposes platform stream keys."
+  },
+  "paths": {
+    "/api/status": {
+      "get": {
+        "summary": "Ingest, per-output, recording and storage state",
+        "responses": {
+          "200": {
+            "description": "Current status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "summary": "Liveness of the status service itself",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "ok"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "summary": "This specification",
+        "responses": {
+          "200": {
+            "description": "OpenAPI document",
+            "content": {
+              "application/json": {}
+            }
+          }
+        }
+      }
+    },
+    "/": {
+      "get": {
+        "summary": "Status page (HTML, polls /api/status)",
+        "responses": {
+          "200": {
+            "description": "HTML page",
+            "content": {
+              "text/html": {}
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "responses": {
+      "Error": {
+        "description": "Error",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "required": [
+          "error",
+          "message"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "details": {},
+          "request_id": {
+            "type": "string"
+          }
+        }
+      },
+      "Output": {
+        "type": "object",
+        "required": [
+          "name",
+          "state",
+          "detail"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "idle",
+              "connecting",
+              "connected",
+              "failed",
+              "unknown"
+            ],
+            "description": "disabled: URL empty or named key empty. idle: no ingest, nothing to push. connecting: push started, no data yet. connected: byte counter advancing. failed: ingest live but this output is not delivering. unknown: output process not reporting while there is no ingest."
+          },
+          "detail": {
+            "type": "string"
+          },
+          "destination": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Configured URL without the stream key, or the recording file name."
+          },
+          "bytes": {
+            "type": "integer",
+            "description": "Bytes delivered in the current run."
+          },
+          "runs": {
+            "type": "integer",
+            "description": "ffmpeg runs since the output process started."
+          },
+          "last_exit": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "reason": {
+                "type": "string",
+                "description": "Last ffmpeg error line, with platform keys redacted."
+              }
+            }
+          }
+        }
+      },
+      "Status": {
+        "type": "object",
+        "required": [
+          "generated_at",
+          "ingest",
+          "outputs",
+          "recording"
+        ],
+        "properties": {
+          "generated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ingest": {
+            "type": "object",
+            "required": [
+              "state",
+              "detail"
+            ],
+            "properties": {
+              "state": {
+                "type": "string",
+                "enum": [
+                  "live",
+                  "no_ingest",
+                  "unknown"
+                ],
+                "description": "unknown: the RTMP server API is unreachable."
+              },
+              "detail": {
+                "type": "string"
+              },
+              "since": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "tracks": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "bytes_received": {
+                "type": "integer"
+              },
+              "gap_started": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date-time"
+              },
+              "last_gap": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "duration_seconds": {
+                    "type": "number"
+                  }
+                }
+              }
+            }
+          },
+          "outputs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Output"
+            }
+          },
+          "recording": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Output"
+              }
+            ],
+            "properties": {
+              "file": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          "storage": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "free_bytes": {
+                "type": "integer"
+              },
+              "total_bytes": {
+                "type": "integer"
+              },
+              "min_free_bytes": {
+                "type": "integer"
+              },
+              "threshold_breached": {
+                "type": "boolean"
+              },
+              "error": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

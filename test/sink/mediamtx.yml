@@ -1,0 +1,18 @@
+logLevel: info
+rtsp: false
+hls: false
+webrtc: false
+srt: false
+moq: false
+rtmpEncryption: optional
+rtmpServerKey: /server.key
+rtmpServerCert: /server.crt
+api: true
+authInternalUsers:
+  - user: any
+    permissions:
+      - action: publish
+      - action: read
+      - action: api
+paths:
+  all_others:
