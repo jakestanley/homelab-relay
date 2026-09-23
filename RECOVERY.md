@@ -26,7 +26,8 @@ debugging it minutes before going live.
   See `.env.example`.
 - The images for `RELAY_IMAGE_TAG` exist on adler
   (`docker image ls homelab-relay`) and passed `test/acceptance.sh`.
-- `INGEST_KEY` equals batw's `STREAM_KEY_LIVE`.
+- `INGEST_KEY` equals batw's `STREAM_KEY_LIVE`, and uses only letters,
+  digits, `_`, `.` and `-` (`up.sh` refuses anything else).
 - `RECORD_DIR` exists, is writable by `RELAY_UID` (default 1000), and has
   free space. `up.sh` creates it if missing.
 - `homelab-infra` is deployed: `stream-relay.stanley.arpa` → adler:20040
@@ -129,6 +130,8 @@ platform's certificate against public roots.
 | Status page unreachable | `status` or nginx down; broadcast unaffected | `docker compose -p homelab-relay ps`; `./scripts/up.sh` |
 | RTMP server unreachable | `mediamtx` down; no ingest possible | `./scripts/up.sh`; if still down within minutes, **bail out** |
 | No ingest while OBS says live | OBS pointed elsewhere, or wrong key | Check batw target and `STREAM_KEY_LIVE` = `INGEST_KEY`; `mediamtx` logs show `authentication failed` for a wrong key |
+| `mediamtx` log: `invalid path name` | The key OBS sends has a character MediaMTX refuses (e.g. `=`) | Same new key, letters/digits/`_.-` only, in both `.env` files; restart the stream in OBS so it picks the key up |
+| OBS still sends the old key after you changed it | OBS keeps retrying with the settings it started with | Stop streaming and start again through batw |
 | One platform **failed**, others connected | That platform refused or stalled | Reason on the page and in `logs out-<name>`. It retries on its own, at most 10 s apart. If the reason points at the key or the platform's URL, fix it in `.env` and run `./scripts/up.sh` (recreates only that output) |
 | All platforms **failed**, ingest live | adler's internet egress, or all keys wrong | Check egress from adler; if not quickly fixable, **bail out** |
 | Output **unknown** | Its wrapper is not reporting | `./scripts/up.sh` |

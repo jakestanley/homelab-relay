@@ -175,6 +175,13 @@ without a query string such as `?bandwidthtest=true`), never written to the
 report files, and never given to the status service. Anyone who can run
 `docker inspect` on adler can still read them from the container environment.
 
+The ingest key may contain only letters, digits, `_`, `.` and `-`. It becomes
+a MediaMTX path name (`live/<key>`), and MediaMTX refuses any other character,
+before it even compares the key. A base64 key with `=` or `+` is refused on
+every publish. `up.sh` checks this (`scripts/check-ingest-key.sh`) before
+starting anything. `python3 -c "import secrets; print(secrets.token_urlsafe(32))"`
+generates a suitable key.
+
 The ingest key is a LAN shared secret, not a platform credential. MediaMTX
 names it in its own log lines (it is the path name), which is accepted. The
 wrappers redact it anyway, so it stays out of `/api/status` (the last error

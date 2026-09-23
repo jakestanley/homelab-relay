@@ -77,6 +77,13 @@ cd "${ROOT_DIR}"
 # Fails fast, with a named variable, if INGEST_KEY or RECORD_DIR is unset.
 docker compose config -q
 
+# A key MediaMTX cannot use as a path name is refused on every publish, which
+# otherwise only shows up when OBS tries to go live. Checked before anything
+# is (re)started. The key is piped, never passed as an argument.
+docker compose config --format json \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["services"]["mediamtx"]["environment"]["MTX_AUTHINTERNALUSERS_0_PERMISSIONS_0_PATH"].removeprefix("live/"))' \
+  | "${ROOT_DIR}/scripts/check-ingest-key.sh"
+
 # The archive directory must exist and be owned by the relay user before
 # Docker bind-mounts it, or Docker creates it root-owned and the recorder
 # cannot write.
