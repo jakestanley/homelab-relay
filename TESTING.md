@@ -96,6 +96,10 @@ are kept because they are not repeated by the script.
 - **A full stop/start (`docker compose stop` then `start`)** with platform
   keys empty: each platform logged only its `disabled` line and held 0 TCP
   connections.
+- **Go-live after 62 minutes idle** (a separate stack, started 19:12:36Z,
+  publishing at 20:14:45Z): sink-a, sink-b and the recorder connected
+  **7.95 s** from publisher start, the same as with no idle. All 10
+  containers still had `RestartCount=0`, so no restart backoff had built up.
 - **Docker at boot.** `docker`, `docker.socket` and `containerd` are
   `enabled`. Every broadcast-path container has restart policy `always`.
 
