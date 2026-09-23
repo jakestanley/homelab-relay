@@ -77,7 +77,11 @@ class Wrapper:
                 raise SystemExit("{} is required".format(var))
 
         self.io_timeout = env_float("OUTPUT_IO_TIMEOUT", 10.0)
-        self.secrets = key_secrets(self.key)
+        # The ingest key is exempt from the no-logging rule, but redacting it
+        # here keeps it out of last_exit, and so out of /api/status, should
+        # the status vhost ever be exposed beyond the LAN.
+        ingest_key = self.ingest_path.rsplit("/", 1)[-1]
+        self.secrets = key_secrets(self.key) + [ingest_key]
         self.report_path = os.path.join(self.state_dir, self.name + ".json")
 
         self.phase = "starting"
@@ -314,6 +318,9 @@ class Wrapper:
 
         if record_path:
             self._discard_if_empty(record_path)
+        # The page shows current_file as "being written"; once the run is
+        # over there is none.
+        self.current_file = None
         self.write_report()
         return delivered_for
 
@@ -358,7 +365,6 @@ class Wrapper:
         try:
             if os.path.getsize(path) == 0:
                 os.remove(path)
-                self.current_file = None
                 return
         except OSError:
             return

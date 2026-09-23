@@ -1,4 +1,6 @@
+import io
 import os
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -164,6 +166,25 @@ class WrapperTests(unittest.TestCase):
         w.write_report()
         with open(w.report_path) as fh:
             self.assertNotIn("SECRETKEY", fh.read())
+
+    def test_ingest_key_redacted_from_errors_and_report(self):
+        w = self.make(OUTPUT_NAME="s", OUTPUT_URL="rtmp://sink/x")
+        w._read_stderr(io.StringIO("rtmp://mediamtx:1935/live/ingest: Connection refused\n"))
+        self.assertEqual(w.last_error, "rtmp://mediamtx:1935/live/<redacted>: Connection refused")
+
+    def test_current_file_cleared_when_recording_ends(self):
+        rec_dir = tempfile.mkdtemp()
+        w = self.make(OUTPUT_NAME="recorder", OUTPUT_KIND="record", RECORD_DIR=rec_dir)
+        path = w.new_recording_path()
+        w.current_file = os.path.basename(path)
+        # Stand-in for ffmpeg: writes a non-empty recording and exits.
+        fake = [sys.executable, "-c", "open({!r}, 'wb').write(b'x')".format(path)]
+        with mock.patch.object(w, "build_command", return_value=(fake, path)):
+            w.run_ffmpeg()
+        self.assertTrue(os.path.exists(path))
+        self.assertIsNone(w.current_file)
+        with open(w.report_path) as fh:
+            self.assertIn('"current_file": null', fh.read())
 
     def test_recording_paths_never_collide(self):
         rec_dir = tempfile.mkdtemp()
