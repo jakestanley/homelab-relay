@@ -87,8 +87,10 @@ spec for when that would be revisited.
 ### When ingest drops
 
 When OBS disconnects, every output drops too, and viewers see the stream stop.
-When OBS reconnects, every enabled output reconnects without intervention,
-usually within 5–10 s. Each platform treats that as a new session. The relay
+When OBS reconnects, every enabled output reconnects without intervention.
+In testing, all outputs were delivering again 8 s after the publisher
+restarted (see [TESTING.md](TESTING.md)). Each platform treats that as a new
+session. The relay
 does not generate filler to hold connections open (that would mean
 transcoding, and the host has no GPU). During a gap the page reads **no
 ingest**, not "failed".
@@ -122,20 +124,37 @@ left to the proxy.
 
 ## Running it
 
-Docker on adler (Linux) is the runtime.
+Docker on adler (Linux) is the runtime. Images are built once, tested, and
+then run by tag:
 
 ```sh
-cp .env.example .env     # then set INGEST_KEY, RECORD_DIR and the platform keys
-./scripts/up.sh
+scripts/build.sh 2026-09-23            # builds homelab-relay[-mediamtx]:2026-09-23
+test/acceptance.sh 2026-09-23          # the sink checks, against that exact image
+cp .env.example .env                   # set RELAY_IMAGE_TAG=2026-09-23, INGEST_KEY,
+                                       # RECORD_DIR and the platform keys
+scripts/up.sh
 ```
 
-`scripts/up.sh` is the entrypoint and is safe to re-run against a running
-relay. It runs the preflight checks on `homelab-standards` and `homelab-infra`
-(warn and ask, never pull), syncs `imported/`, checks `.env`, creates
-`RECORD_DIR` if missing, then runs `docker compose up -d --build`. Image
-builds are reproducible (`SOURCE_DATE_EPOCH=0`, one service builds the relay
-image), so a re-run with no real change recreates nothing. **A real code
-change does recreate the outputs, so do not deploy mid-broadcast.**
+**`scripts/up.sh` never builds.** It runs the preflight checks on
+`homelab-standards` and `homelab-infra` (warn and ask, never pull), syncs
+`imported/`, checks `.env`, creates `RECORD_DIR` if missing, checks that the
+images for `RELAY_IMAGE_TAG` exist, then runs `docker compose up -d`. So the
+image that passed the acceptance checks is the image that runs on the night.
+Re-running `up.sh` against a running relay recreates nothing unless `.env`
+changed, and then only the affected container: changing one platform key
+recreates only that output. If the tagged image is missing (fresh host,
+prune), `up.sh` fails and leaves any running containers alone. It does not
+build a replacement.
+
+**Rebuilding is deliberate.** `apt-get install ffmpeg` resolves against the
+live Debian mirror, so two builds of the same `Dockerfile` can contain
+different ffmpeg versions. The tag records what was tested, not the file.
+`scripts/build.sh` never overwrites a tag, labels images with the git revision,
+and prints the ffmpeg and MediaMTX versions. Base images are pinned by digest.
+Build from a clean clone; `build.sh` labels a dirty tree `-dirty`. Between
+shows: build a new tag, run `test/acceptance.sh` on it, then point
+`RELAY_IMAGE_TAG` at it. Changing the tag recreates every container, so
+**never switch tags mid-broadcast**.
 
 The Compose project name is fixed (`homelab-relay`), so it can be deployed
 from an ephemeral clone (`PATTERNS/checkout-topology.md`). The MediaMTX config
@@ -157,7 +176,9 @@ report files, and never given to the status service. Anyone who can run
 `docker inspect` on adler can still read them from the container environment.
 
 The ingest key is a LAN shared secret, not a platform credential. MediaMTX
-names it in its own log lines (it is the path name), which is accepted.
+names it in its own log lines (it is the path name), which is accepted. The
+wrappers redact it anyway, so it stays out of `/api/status` (the last error
+line is shown there) in case the status vhost is ever exposed beyond the LAN.
 
 ### Ingress and ports
 
@@ -197,11 +218,22 @@ Unit tests (standard library only):
 python3 -m unittest discover -s tests -t .
 ```
 
-The acceptance checks in the spec run against the local test sinks.
-`docker compose --profile sinks up -d` starts two throwaway MediaMTX instances.
-Each accepts RTMP on :1935 and RTMPS on :1936 with a self-signed
-certificate, and is published on `127.0.0.1:19351` / `19352` for `ffprobe`.
-Point the sink slots at them in `.env`:
+Acceptance checks, against a built tag, on the local test sinks:
+
+```sh
+test/acceptance.sh 2026-09-23 [--idle 3600]
+```
+
+This runs an isolated Compose project (`relayaccept`, ports 11935/20940) beside
+the real relay, with two throwaway MediaMTX sinks. Each sink accepts RTMP on
+:1935 and RTMPS on :1936 with a self-signed certificate. The script checks
+ingest, re-encoding, isolation, stalls, publisher restart, crash, full disk,
+key leaks, TLS verification and disabled outputs, and prints PASS/FAIL with
+measured numbers. `--idle` waits before going live, for the restart-backoff
+check. What was run, and what was not, is in [TESTING.md](TESTING.md).
+
+To use the sinks by hand, start them with `docker compose --profile sinks up -d`
+and set the sink slots in `.env`:
 
 ```sh
 SINK_A_URL=rtmp://sink-a:1935/sink

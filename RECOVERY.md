@@ -22,7 +22,10 @@ debugging it minutes before going live.
 
 - adler is up, with Docker and containerd enabled at boot (they are).
 - The repo checkout (or a fresh clone) with a filled-in `.env`. Required:
-  `SERVICE_PORT`, `RTMP_PORT`, `INGEST_KEY`, `RECORD_DIR`. See `.env.example`.
+  `RELAY_IMAGE_TAG`, `SERVICE_PORT`, `RTMP_PORT`, `INGEST_KEY`, `RECORD_DIR`.
+  See `.env.example`.
+- The images for `RELAY_IMAGE_TAG` exist on adler
+  (`docker image ls homelab-relay`) and passed `test/acceptance.sh`.
 - `INGEST_KEY` equals batw's `STREAM_KEY_LIVE`.
 - `RECORD_DIR` exists, is writable by `RELAY_UID` (default 1000), and has
   free space. `up.sh` creates it if missing.
@@ -35,9 +38,9 @@ debugging it minutes before going live.
 
 1. **Is it running?** `docker compose -p homelab-relay ps` from the repo.
    Expect `mediamtx`, `status`, `recorder` and `out-*` all `Up`.
-2. **Start or repair:** `./scripts/up.sh`. It is safe to re-run. If nothing
-   changed it recreates nothing; if the code or `.env` changed it recreates
-   only what changed.
+2. **Start or repair:** `./scripts/up.sh`. It is safe to re-run. It never
+   builds, so it cannot change the image. If `.env` is unchanged it recreates
+   nothing; otherwise only the affected containers.
 3. **Check the page:** <https://stream-relay.stanley.arpa/> (or
    `http://adler:20040/`). Before a broadcast, expect **No ingest**, each
    platform you intend to use **idle**, the others **disabled**, and no
@@ -68,7 +71,9 @@ ffmpeg -re -f lavfi -i testsrc2=size=1280x720:rate=30 -f lavfi -i sine=frequency
 ```
 
 Expect the page to show **Ingest live**, the recorder **recording**, and a
-new file in `RECORD_DIR`. A wrong key fails with `authentication failed`.
+new file in `RECORD_DIR`. With a wrong key, ffmpeg reports
+`Server error: authentication failed` and the `mediamtx` log shows
+`failed to authenticate` (both seen in testing; OBS shows its own error dialog).
 Alternatively, point OBS at `rtmp://adler.stanley.arpa/live` via batw and
 start streaming.
 
@@ -114,7 +119,8 @@ platform's certificate against public roots.
 - [ ] Any `?bandwidthtest=true` removed from `STREAM_KEY_TWITCH`.
 - [ ] Keys set only for the platforms in this broadcast (clear a key to drop
       a platform, then `./scripts/up.sh`).
-- [ ] No deploys to adler until after the show.
+- [ ] `RELAY_IMAGE_TAG` is a tag that passed `test/acceptance.sh`, and it
+      does not change until after the show.
 
 ## Symptoms
 
@@ -123,9 +129,10 @@ platform's certificate against public roots.
 | Status page unreachable | `status` or nginx down; broadcast unaffected | `docker compose -p homelab-relay ps`; `./scripts/up.sh` |
 | RTMP server unreachable | `mediamtx` down; no ingest possible | `./scripts/up.sh`; if still down within minutes, **bail out** |
 | No ingest while OBS says live | OBS pointed elsewhere, or wrong key | Check batw target and `STREAM_KEY_LIVE` = `INGEST_KEY`; `mediamtx` logs show `authentication failed` for a wrong key |
-| One platform **failed**, others connected | That platform refused or stalled | Reason on the page and in `logs out-<name>`. It retries every ≤10 s. Wrong or expired key is the usual cause: fix the key, `./scripts/up.sh` (restarts only that output) |
+| One platform **failed**, others connected | That platform refused or stalled | Reason on the page and in `logs out-<name>`. It retries on its own, at most 10 s apart. If the reason points at the key or the platform's URL, fix it in `.env` and run `./scripts/up.sh` (recreates only that output) |
 | All platforms **failed**, ingest live | adler's internet egress, or all keys wrong | Check egress from adler; if not quickly fixable, **bail out** |
 | Output **unknown** | Its wrapper is not reporting | `./scripts/up.sh` |
+| `up.sh`: `Missing image homelab-relay:<tag>` | The tested image is gone (prune, new host) | Do not build at T-minus: **bail out**. With time to spare: `scripts/build.sh <new tag>`, `test/acceptance.sh <new tag>`, set `RELAY_IMAGE_TAG`, `./scripts/up.sh` |
 | Recording **failed**: `No space left on device` | Archive disk full; broadcast unaffected | Free space in `RECORD_DIR`; it resumes into a new file on its own |
 | A platform shows **disabled** you wanted | Its URL or key is empty in `.env` | Set it, `./scripts/up.sh` |
 
