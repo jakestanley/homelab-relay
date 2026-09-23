@@ -22,7 +22,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECT=relayaccept
 RTMP_PORT=11935
 HTTP_PORT=20940
-INGEST_KEY=acceptance-ingest-key
+INGEST_KEY=Acc3pt_ingest-key.v1   # every character class the key check allows
 # Fake platform keys: every check below must never find these in any output.
 KEY_TW="live_ACCEPTLEAK_tw1?bandwidthtest=true"
 KEY_YT="ACCEPTLEAK-yt2-xxxx"
@@ -129,7 +129,23 @@ log
 if ! dc up -d --build >/dev/null 2>&1; then
   fail "stack starts" "docker compose up failed"; exit 1
 fi
-wait_for 30 is sink-a idle >/dev/null || { fail "stack starts" "status page never showed sink-a idle"; exit 1; }
+# Every output must have written its first report before states are judged;
+# until then it is legitimately "unknown".
+all_reported() {
+  status | python3 -c 'import json,sys; s=json.load(sys.stdin); sys.exit(any(o["state"]=="unknown" for o in s["outputs"]+[s["recording"]]))'
+}
+wait_for 30 all_reported >/dev/null || { fail "stack starts" "outputs still unknown after 30s"; exit 1; }
+
+# --- Ingest key check (scripts/check-ingest-key.sh, run by up.sh) -------------
+bad_ok=0
+for k in 'base64pad==' 'with+plus' 'with/slash' 'with space' ''; do
+  printf '%s\n' "${k}" | "${ROOT}/scripts/check-ingest-key.sh" 2>/dev/null && bad_ok=$((bad_ok + 1))
+done
+if [[ "${bad_ok}" -eq 0 ]] && printf '%s\n' "${INGEST_KEY}" | "${ROOT}/scripts/check-ingest-key.sh"; then
+  pass "ingest key check refuses = + / space empty, accepts letters digits _ . -"
+else
+  fail "ingest key check" "${bad_ok} bad keys accepted, or the good key refused"
+fi
 
 # --- Before ingest -----------------------------------------------------------
 s="$(state ingest) twitch=$(state twitch) youtube=$(state youtube) facebook=$(state facebook) sink-a=$(state sink-a) sink-b=$(state sink-b) recorder=$(state recorder)"
@@ -150,6 +166,16 @@ fi
 if [[ "${IDLE}" -gt 0 ]]; then
   log "idling ${IDLE}s before go-live"
   sleep "${IDLE}"
+fi
+
+# MediaMTX's log must stay readable while idle: the consumers poll the API
+# every second and none of that may be logged as an error.
+sleep 5
+errs=$(dc logs --no-log-prefix mediamtx 2>&1 | grep -c ' ERR ')
+if [[ "${errs}" -eq 0 ]]; then
+  pass "idle: no ERR lines in the mediamtx log"
+else
+  fail "idle: no ERR lines in the mediamtx log" "${errs} ERR lines"
 fi
 
 # --- Go-live -----------------------------------------------------------------
