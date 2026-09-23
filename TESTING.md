@@ -22,6 +22,79 @@ publishing side.
 
 ## Record
 
+### 2026-09-23: tag `2026-09-23-2` (current)
+
+- Images: `homelab-relay:2026-09-23-2` `sha256:4809c3b8…` and
+  `homelab-relay-mediamtx:2026-09-23-2` `sha256:20581eb0…`, revision
+  `0772583`, built from a clean clone. ffmpeg `7.1.5-0+deb13u1`, MediaMTX
+  `v1.21.1`.
+- Changes from `2026-09-23`: the consumers poll `/v3/paths/list` (no ERR log
+  spam while idle); `up.sh` refuses an ingest key MediaMTX cannot use.
+
+`test/acceptance.sh 2026-09-23-2`: **26/26 passed**. Same checks as below,
+plus three new ones:
+
+| Check | Seen |
+| --- | --- |
+| Ingest key check | refuses `=`, `+`, `/`, space and empty; accepts letters, digits, `_`, `.`, `-` |
+| Idle MediaMTX log | 0 ERR lines |
+| Outputs all reported before states are judged | (fixes the start-up race below) |
+
+Figures: go-live 7.6 s; bitrate ingest 2419 / sinks 2430 kbit/s (within
+0.5%, sampled over separate 10 s windows); sink-a recovery 5.0 s; stall shown
+`failed` 21.6 s after freeze, retried 23.3 s later, recovered 5.2 s after
+unfreeze; publisher restart 8.3 s; gap 8.0 s logged; SIGKILLed file plays
+(9.5 s); full disk stops only the recorder.
+
+`up.sh` by hand, in a throwaway project: with the rehearsal's original key
+shape (base64 with `+` and `==`) it printed `INGEST_KEY contains characters
+MediaMTX refuses in a path: '+='`, exited 1, and left the running containers
+untouched.
+
+### 2026-09-23: first rehearsal, recording only, tag `2026-09-23`
+
+The first run with **OBS** as the publisher, from batw on the laptop
+(10.92.8.114) to `rtmp://adler.stanley.arpa/live`. No platform keys were set,
+so only the recorder ran.
+
+- **Key incident.** batw's `STREAM_KEY_LIVE` was base64, ending in `==`.
+  MediaMTX refused every publish with `invalid path name: can contain only
+  alphanumeric characters, underscore, dot, minus, slash`, before comparing
+  the key. The acceptance checks had only used alphanumeric keys, so they
+  never hit this. It took two further mistakes to find:
+  - the per-second API 404s logged at ERR buried the real line;
+  - OBS kept retrying with the old key after `.env` changed, until the
+    stream was restarted.
+
+  Fixed for the rehearsal by removing the `==` on both sides. Fixed in
+  `2026-09-23-2` by the key check and the quieter polling. Also, an
+  unmasked log excerpt during diagnosis printed the ingest key into the
+  session transcript. The spec allows the ingest key in logs, but rotating
+  it costs nothing.
+- **Recordings.** Four sessions, four files, none overwritten: 8.5 s,
+  46.9 s, 24.8 s, then the rehearsal proper at **36 min 21 s** (1.8 GB,
+  about 2.9 GB/hour).
+- **Stream.** H.264 High 1920×1080 at 60 fps, AAC stereo 44.1 kHz, about
+  6.5 Mbit/s. ffprobe reports `r_frame_rate=120/1` on the MPEG-TS; counting
+  gave 3,596 video frames in 60 s, so 60 fps is what was recorded.
+- **Integrity.** A stream-copy read of the whole 36-minute file: no container
+  errors. A decode of a one-minute slice at 30:00: no errors. The whole file
+  has not been decoded, and A/V sync over the full length has not been
+  checked by playback.
+- **Gaps** between sessions were logged: 19.0 s, 60.2 s, 138.4 s, and the end
+  of the rehearsal as a gap start.
+- **Recorder log.** Only start-of-session timestamp notes, and `Error during
+  demuxing: Input/output error` each time OBS disconnected (ingest ending).
+
+### 2026-09-23: tag `2026-09-23`, 61 minutes idle
+
+`test/acceptance.sh 2026-09-23 --idle 3660`: **23/24**. Go-live after 3,660 s
+idle: sinks and recorder connected **8.1 s** from publisher start, the same
+as with no idle. The failure was in the script, not the relay: it judged the
+pre-ingest states as soon as sink-a reported, while out-youtube had not yet
+written its first report and correctly showed `unknown`. The script now waits
+for every first report.
+
 ### 2026-09-23: tag `2026-09-23`
 
 - Images: `homelab-relay:2026-09-23` `sha256:0de871bb…` and
@@ -69,8 +142,8 @@ absorbed the stream. The page reports `failed` 5 s after the counter stops.
   both missing images, and running containers are untouched.
 - A tag that already exists: `scripts/build.sh` refuses to overwrite it.
 
-Go-live after at least an hour idle, against this tag: *running,
-result to be added*.
+Go-live after at least an hour idle, against this tag: see the 61-minute
+run above.
 
 ### 2026-09-23: by hand, before the tag existed
 
@@ -112,7 +185,8 @@ are kept because they are not repeated by the script.
   from this relay. The private routes in RECOVERY.md (Twitch bandwidth test,
   private YouTube stream, Facebook "Only me") have not been exercised. For a
   Facebook **Page**, no private route has been confirmed.
-- **OBS as the publisher.** All runs used ffmpeg. OBS's own message for a
-  wrong key has not been seen.
+- **OBS through the platform outputs.** OBS has only been used with the
+  recorder (first rehearsal). OBS's own message for a wrong key has not been
+  seen.
 - **A stall caused by a firewall** rather than a frozen process. Only
   `docker pause` was used.
