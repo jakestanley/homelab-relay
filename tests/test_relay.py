@@ -1,11 +1,14 @@
 import io
+import json
 import os
 import sys
 import tempfile
+import threading
 import unittest
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from unittest import mock
 
-from relay.common import join_destination, key_secrets, redact
+from relay.common import fetch_ingest, join_destination, key_secrets, redact
 from relay.status import derive_output_state
 
 NOW = 1_000_000.0
@@ -120,6 +123,47 @@ class RedactionTests(unittest.TestCase):
     def test_join_destination(self):
         self.assertEqual(join_destination("rtmps://h/app/", "k"), "rtmps://h/app/k")
         self.assertEqual(join_destination("rtmp://sink:1935/sink", ""), "rtmp://sink:1935/sink")
+
+
+class FetchIngestTests(unittest.TestCase):
+    """fetch_ingest against a stand-in for the MediaMTX list endpoint."""
+
+    def serve(self, items, status=200):
+        body = json.dumps({"itemCount": len(items), "pageCount": 1, "items": items}).encode()
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.requested = self.path
+                self.send_response(status)
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.shutdown)
+        return "http://127.0.0.1:{}".format(server.server_port)
+
+    def test_live(self):
+        api = self.serve([{"name": "live/k", "ready": True, "tracks": ["H264"]}])
+        self.assertEqual(fetch_ingest(api, "live/k")["tracks"], ["H264"])
+
+    def test_path_present_but_not_ready(self):
+        api = self.serve([{"name": "live/k", "ready": False}])
+        self.assertEqual(fetch_ingest(api, "live/k"), {})
+
+    def test_no_paths_is_no_ingest_not_an_error(self):
+        self.assertEqual(fetch_ingest(self.serve([]), "live/k"), {})
+
+    def test_other_path_is_not_ingest(self):
+        api = self.serve([{"name": "live/other", "ready": True}])
+        self.assertEqual(fetch_ingest(api, "live/k"), {})
+
+    def test_api_error_or_unreachable_is_none(self):
+        self.assertIsNone(fetch_ingest(self.serve([], status=500), "live/k"))
+        self.assertIsNone(fetch_ingest("http://127.0.0.1:9", "live/k", timeout=0.5))
 
 
 BASE_ENV = {

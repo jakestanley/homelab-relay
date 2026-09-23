@@ -9,7 +9,6 @@ import logging
 import os
 import sys
 import tempfile
-import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -98,19 +97,21 @@ def read_json(path):
 def fetch_ingest(api_url, ingest_path, timeout=2.0):
     """Ask MediaMTX whether the ingest path has a ready publisher.
 
-    Returns the path document when ingest is live, {} when the path exists
-    but nothing is publishing, and None when the API cannot be reached.
+    Returns the path document when ingest is live, {} when nothing is
+    publishing, and None when the API cannot be reached.
+
+    Uses the list endpoint rather than /v3/paths/get/<path>: while there is
+    no ingest, "get" answers 404 and MediaMTX logs every 404 at ERR level,
+    which at one poll per second per consumer buries the log lines that
+    matter. Only the ingest path can be published to, so the list is tiny.
     """
-    url = "{}/v3/paths/get/{}".format(
-        api_url.rstrip("/"), urllib.parse.quote(ingest_path, safe="/")
-    )
+    url = "{}/v3/paths/list?itemsPerPage=1000".format(api_url.rstrip("/"))
     try:
         with urllib.request.urlopen(url, timeout=timeout) as resp:
             doc = json.load(resp)
-    except urllib.error.HTTPError as exc:
-        # 404: no publisher has created the path yet. That is "no ingest",
-        # not an API failure.
-        return {} if exc.code == 404 else None
     except (OSError, ValueError):
         return None
-    return doc if doc.get("ready") else {}
+    for item in doc.get("items") or []:
+        if item.get("name") == ingest_path:
+            return item if item.get("ready") else {}
+    return {}
