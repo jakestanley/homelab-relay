@@ -12,14 +12,14 @@
 #
 # The project name is fixed so a deploy from any clone path manages the same
 # containers (PATTERNS/checkout-topology.md).
+#
+# Nothing on the broadcast path is built here. scripts/build.sh builds dated
+# images once; RELAY_IMAGE_TAG in .env selects the one that passed the
+# acceptance checks, so the image tested is the image that runs.
 name: homelab-relay
 
-# One image for the wrappers, recorder and status glue. Only `status` builds
-# it: several services building the same tag produce a different image ID on
-# every run, which makes `up.sh` recreate every output even when nothing
-# changed -- an interruption on every re-run.
 x-relay-image: &relay-image
-  image: homelab-relay:local
+  image: homelab-relay:${RELAY_IMAGE_TAG:?RELAY_IMAGE_TAG must be set in .env (see scripts/build.sh)}
   pull_policy: never
   restart: always
   user: "${RELAY_UID:-1000}:${RELAY_GID:-1000}"
@@ -39,8 +39,8 @@ x-output: &output
 
 services:
   mediamtx:
-    build: ./mediamtx
-    image: homelab-relay-mediamtx:local
+    image: homelab-relay-mediamtx:${RELAY_IMAGE_TAG:?RELAY_IMAGE_TAG must be set in .env (see scripts/build.sh)}
+    pull_policy: never
     restart: always
     ports:
       # Declared in homelab-infra registry.yaml as a native port of
@@ -114,8 +114,6 @@ services:
 
   status:
     <<: *relay-image
-    build: .
-    pull_policy: build
     command: ["python", "-m", "relay.status"]
     ports:
       - "${SERVICE_PORT:-20040}:${SERVICE_PORT:-20040}"

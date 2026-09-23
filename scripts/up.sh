@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Canonical entrypoint: build and (re)start the relay. Safe to re-run against
-# a running service -- `docker compose up -d` only recreates containers whose
-# configuration or image changed.
+# Canonical entrypoint: (re)start the relay from the images named by
+# RELAY_IMAGE_TAG in .env. It never builds (see scripts/build.sh), so it cannot
+# change the image under a running relay, and re-running it against a running
+# service recreates only containers whose .env configuration changed.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -89,13 +90,21 @@ if [[ ! -w "${record_dir}" ]]; then
   echo "WARNING: ${record_dir} is not writable by $(id -un); the recorder may fail." >&2
 fi
 
-# Reproducible image IDs: without a fixed timestamp every build gets a new
-# ID even when nothing changed, and compose recreates every container --
-# dropping every output if this is re-run mid-broadcast. Fixed rather than
-# the commit time, so a docs-only commit does not recreate anything either.
-export SOURCE_DATE_EPOCH=0
+# The tagged images must already exist on this host. A missing image means
+# a fresh host or a prune: build and re-check deliberately, not here.
+missing=0
+for image in $(docker compose config --images | grep -E '^homelab-relay(-mediamtx)?:' | sort -u); do
+  if ! docker image inspect "${image}" >/dev/null 2>&1; then
+    echo "Missing image ${image}." >&2
+    missing=1
+  fi
+done
+if [[ "${missing}" -ne 0 ]]; then
+  echo "Build it with scripts/build.sh <tag>, run test/acceptance.sh <tag>, then retry." >&2
+  exit 1
+fi
 
-docker compose up -d --build --remove-orphans
+docker compose up -d --remove-orphans
 
 echo "== homelab-relay up: END"
 docker compose ps --format 'table {{.Service}}\t{{.Status}}'
