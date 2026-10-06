@@ -1,5 +1,13 @@
 # MediaMTX handles ingest only. Fan-out and recording are separate consumer
-# processes (see docker-compose.yml), so nothing here pushes or records.
+# processes (one NSSM service each; see relay/config.py), so nothing here
+# pushes or records.
+#
+# Values that come from .env are set by environment variables on the
+# mediamtx service (relay.config.Config.mediamtx_env), not here: MediaMTX
+# does not expand variables in this file.
+#   MTX_RTMPADDRESS   :<RTMP_PORT>
+#   MTX_APIADDRESS    127.0.0.1:<RELAY_API_PORT>
+#   MTX_AUTHINTERNALUSERS_0_PERMISSIONS_0_PATH   live/<INGEST_KEY>
 
 logLevel: info
 logDestinations: [stdout]
@@ -15,9 +23,9 @@ srt: false
 moq: false
 
 # Consumers and the status glue poll this to see whether ingest is live.
-# Reachable only on the compose network; its port is not published.
+# Loopback only: they all run on this host.
 api: true
-apiAddress: :9997
+apiAddress: 127.0.0.1:9997
 
 authMethod: internal
 authInternalUsers:
@@ -26,15 +34,14 @@ authInternalUsers:
     ips: []
     permissions:
       # Publishing is allowed on exactly one path: live/<INGEST_KEY>. OBS
-      # sends server rtmp://adler.stanley.arpa/live plus the key, so the key
-      # is the last path segment and a wrong key is rejected.
+      # sends server rtmp://<relay host>/live plus the key, so the key is the
+      # last path segment and a wrong key is rejected.
       #
-      # MediaMTX does not expand variables in this file, so the real value
-      # comes from MTX_AUTHINTERNALUSERS_0_PERMISSIONS_0_PATH (set in
-      # docker-compose.yml from INGEST_KEY). The index is positional: keep
-      # this entry first in this list, and this list first in the users.
+      # The real value comes from MTX_AUTHINTERNALUSERS_0_PERMISSIONS_0_PATH.
+      # The index is positional: keep this entry first in this list, and this
+      # list first in the users.
       - action: publish
-        path: live/unset-ingest-key-see-docker-compose
+        path: live/unset-ingest-key-see-relay-config
       - action: read
       - action: api
 
