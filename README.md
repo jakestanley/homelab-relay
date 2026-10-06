@@ -171,6 +171,16 @@ afterwards is safe. Runtime state lives outside the tree: recordings in
 The service starts on boot through Docker's `restart: always` (Docker and
 containerd are enabled units on adler).
 
+**Stopping between shows** (the adler fallback runs only on show days):
+`scripts/stop.sh` sets the containers' restart policy to `no` and stops
+them, so they stay down across reboots; `scripts/start.sh` restores
+`restart: always` and starts the same containers. Both work by Compose project
+name, not from a compose file, so they handle whichever layout is running and
+never recreate anything. `stop.sh` refuses while ingest is live unless given
+`--force`. On Windows the equivalents are `scripts\install-service.ps1 -Stop`
+and `scripts\up.ps1`; NSSM services are auto-start, so a stopped Windows
+relay comes back at the next boot or Ansible deploy.
+
 ### Configuration
 
 All configuration is in `.env`; `.env.example` lists every variable and marks
