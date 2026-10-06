@@ -23,6 +23,7 @@ turns them into ffmpeg arguments.
 import os
 import signal
 import subprocess
+import sys
 import threading
 import time
 import urllib.parse
@@ -61,6 +62,95 @@ RENDITION_VARS = (
 # its own process group so that only the wrapper receives it, and the wrapper
 # then ends ffmpeg itself rather than racing it to the exit.
 POPEN_FLAGS = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+
+
+class ChildTie:
+    """Makes ffmpeg die with the wrapper, however the wrapper ends.
+
+    Under NSSM nothing else does: if the wrapper crashed, its ffmpeg would
+    carry on, and the restarted wrapper would start a second one beside it.
+    For the recorder that is two processes writing the same session. Windows:
+    a job object that kills its processes when its last handle closes, which
+    the OS does when the wrapper exits. Linux (the acceptance checks): the
+    parent-death signal.
+
+    Best effort: if it cannot be set up, the wrapper logs that once and runs
+    ffmpeg anyway. Losing this costs a duplicate after a crash, not the
+    broadcast.
+    """
+
+    def __init__(self, log):
+        self.log = log
+        self.kernel32 = None
+        self.job = None
+        self.preexec = None
+        try:
+            if os.name == "nt":
+                self.kernel32, self.job = _kill_on_close_job()
+            elif sys.platform.startswith("linux"):
+                import ctypes
+
+                libc = ctypes.CDLL(None, use_errno=True)
+                # PR_SET_PDEATHSIG = 1, SIGKILL = 9. Runs in the child,
+                # between fork and exec.
+                self.preexec = lambda: libc.prctl(1, signal.SIGKILL)
+        except Exception as exc:  # noqa: BLE001 - see docstring
+            self.log.warning("cannot tie ffmpeg to the wrapper (%s); it may outlive a crash", exc)
+
+    def attach(self, proc):
+        if self.job is None:
+            return
+        import ctypes
+
+        if not self.kernel32.AssignProcessToJobObject(self.job, int(proc._handle)):
+            self.log.warning("cannot add ffmpeg to the wrapper's job (error %d)", ctypes.get_last_error())
+
+
+def _kill_on_close_job():
+    import ctypes
+    from ctypes import wintypes
+
+    class BasicLimits(ctypes.Structure):
+        _fields_ = [
+            ("PerProcessUserTimeLimit", ctypes.c_int64),
+            ("PerJobUserTimeLimit", ctypes.c_int64),
+            ("LimitFlags", wintypes.DWORD),
+            ("MinimumWorkingSetSize", ctypes.c_size_t),
+            ("MaximumWorkingSetSize", ctypes.c_size_t),
+            ("ActiveProcessLimit", wintypes.DWORD),
+            ("Affinity", ctypes.c_size_t),
+            ("PriorityClass", wintypes.DWORD),
+            ("SchedulingClass", wintypes.DWORD),
+        ]
+
+    class IoCounters(ctypes.Structure):
+        _fields_ = [(n, ctypes.c_uint64) for n in ("Reads", "Writes", "Others", "ReadBytes", "WriteBytes", "OtherBytes")]
+
+    class ExtendedLimits(ctypes.Structure):
+        _fields_ = [
+            ("BasicLimitInformation", BasicLimits),
+            ("IoInfo", IoCounters),
+            ("ProcessMemoryLimit", ctypes.c_size_t),
+            ("JobMemoryLimit", ctypes.c_size_t),
+            ("PeakProcessMemoryUsed", ctypes.c_size_t),
+            ("PeakJobMemoryUsed", ctypes.c_size_t),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+    kernel32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+    kernel32.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+    kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+
+    job = kernel32.CreateJobObjectW(None, None)
+    if not job:
+        raise OSError("CreateJobObject failed: {}".format(ctypes.get_last_error()))
+    info = ExtendedLimits()
+    info.BasicLimitInformation.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    # 9 = JobObjectExtendedLimitInformation
+    if not kernel32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info)):
+        raise OSError("SetInformationJobObject failed: {}".format(ctypes.get_last_error()))
+    return kernel32, job
 
 stop_event = threading.Event()
 
@@ -131,6 +221,7 @@ class Wrapper:
         self._first_progress = None
         self.api_down_since = None
         self.api_warned = False
+        self.tie = ChildTie(self.log)
 
     # -- configuration ----------------------------------------------------
 
@@ -362,7 +453,9 @@ class Wrapper:
             errors="replace",
             bufsize=1,
             creationflags=POPEN_FLAGS,
+            preexec_fn=self.tie.preexec,
         )
+        self.tie.attach(proc)
         readers = [
             threading.Thread(target=self._read_progress, args=(proc.stdout,), daemon=True),
             threading.Thread(target=self._read_stderr, args=(proc.stderr,), daemon=True),
