@@ -12,6 +12,16 @@
 logLevel: info
 logDestinations: [stdout]
 
+# Packets queued per reader before MediaMTX drops it as "too slow". A
+# transcoding output takes ~10s to start (CUDA and NVENC init, input probe)
+# before it reads at full speed; at the 30 Mbps 1080p60 master (~110
+# packets/s) the default 512 overflowed in ~5s, and every output was dropped
+# and reconnected through the first 15s of go-live (shrike acceptance run,
+# 2026-10-06). 4096 is ~35s of headroom, ~130 MB per reader at worst; a
+# reader that starts late now begins behind live and catches up instead.
+# Must be a power of two.
+writeQueueSize: 4096
+
 # Ingest is RTMP only. Every other protocol is off.
 rtmp: true
 rtmpAddress: :1935
