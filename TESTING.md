@@ -1,26 +1,61 @@
 # TESTING — homelab-relay
 
-What has been run, against what, and what was seen. Everything here was
-observed on adler. Anything not observed is listed under
+What has been run, against what, and what was seen, on adler (Linux) and
+shrike (Windows). Anything not observed is listed under
 [Not verified](#not-verified), not stated as fact elsewhere.
 
 ## How to re-run
 
 ```sh
-python3 -m unittest discover -s tests -t .      # unit tests, no Docker
-test/acceptance.sh <tag> [--idle SECONDS]       # sink checks against a built tag
+python3 -m unittest discover -s tests -t .      # unit tests
+python test/acceptance.py [--encoder E] [--small] [--idle S] [--full-disk-dir D]
 ```
 
-`test/acceptance.sh` writes its report to `test/reports/` (not committed).
-Run it on every new tag before pointing `RELAY_IMAGE_TAG` at it, and add the
-result below.
+`test/acceptance.py` is one suite for both platforms. It runs the relay's own
+processes, compiled by the same `relay.config` both platforms deploy from, as
+children of the script on spare ports (RTMP 11935, status 20940, API 19997,
+sinks 19351/19352 and 19361/19362), so it runs beside a live relay. Nothing
+in it contacts a platform: "twitch" is unresolvable and "youtube" is a local
+self-signed sink. Only the opt-in `--public-tls` reaches one.
 
-The publisher in all runs is ffmpeg, not OBS: `testsrc2` 1280x720 at 30 fps,
-x264 High profile with a 2 s GOP at 2.5 Mbit/s, and AAC audio. "From publisher
-start" times therefore include roughly 1–2 s of x264 start-up on the
-publishing side.
+| Host | Command | What it certifies |
+| --- | --- | --- |
+| shrike | `.venv\Scripts\python.exe test\acceptance.py --ffmpeg tools\ffmpeg\bin\ffmpeg.exe --mediamtx tools\mediamtx\mediamtx.exe` | the show path: NVENC, full-size renditions, 30 Mbps master |
+| adler | `docker run --rm --network host -v "$PWD":/app -w /app homelab-relay:<tag> python test/acceptance.py --encoder copy --small` | the stream-copy fallback, in the image that will run |
+| any | `--encoder libx264 --small` | a smoke test of the transcoding path without a GPU |
+
+Full size, the publisher sends what batw sends on show day: 1080p60 at
+30000 kbps with 320 kbps 48 kHz stereo AAC. `--small` sends 720p30 at
+2.5 Mbps so a CPU-only host keeps up. Reports go to `test/reports/` (not
+committed). Run it on every new tag (Linux) or deploy (Windows) before a
+show depends on it, and add the result below. NSSM's own behaviour (boot
+start, restart after a crash) is not covered: the harness stands in for NSSM.
 
 ## Record
+
+### 2026-10-06: `test/acceptance.py`, both platforms (current)
+
+Replaces `test/acceptance.sh` (bash and Docker, adler only), which was
+removed with the move to one layout for both hosts.
+
+- **shrike**, h264_nvenc, full size, RTX 3070 Ti (driver 610.88), ffmpeg
+  9.0.2 (Gyan essentials), MediaMTX 1.21.1: **33/33 passed**, full-disk and
+  public-TLS skipped. sink-a 1664x936 60 fps at 5507 kbit/s (target 5500),
+  sink-b 1920x1080 60 fps at 8991 (target 9000), keyframes exactly 2.0 s,
+  go-live 6.4 s with no reconnect, recording a copy of the 30 Mbps master.
+- **The first shrike run failed 6 checks**: every transcoding output was
+  dropped by MediaMTX ("reader is too slow, discarding frames") and
+  reconnected through the first ~15 s of go-live. A transcoding ffmpeg takes
+  ~10 s to start reading at full speed, and at the 30 Mbps master the default
+  512-packet write queue overflowed first. Fixed with `writeQueueSize: 4096`
+  in `mediamtx/mediamtx.yml`. The check "go-live is clean: no output
+  reconnected" was added so it cannot come back unseen. The Linux runs below
+  never saw it because `--small` is a far lighter input.
+- **adler**, in the relay image (Debian ffmpeg 7.1.5, MediaMTX 1.21.1),
+  `--small --full-disk-dir` on a 24 MB tmpfs: **34/34** with
+  `--encoder copy` (each sink receives ingest untouched) and **34/34** with
+  `--encoder libx264`.
+
 
 ### 2026-09-23: tag `2026-09-23-2` (current)
 
@@ -188,5 +223,10 @@ are kept because they are not repeated by the script.
 - **OBS through the platform outputs.** OBS has only been used with the
   recorder (first rehearsal). OBS's own message for a wrong key has not been
   seen.
-- **A stall caused by a firewall** rather than a frozen process. Only
-  `docker pause` was used.
+- **A stall caused by a firewall** rather than a frozen process. Only a
+  frozen process (`docker pause`, then SIGSTOP/NtSuspendProcess) was used.
+- **Full archive disk on Windows.** Proved on Linux only (tmpfs); shrike has
+  no small volume to fill.
+- **The copy fallback at full size.** The copy runs used `--small`; adler's
+  CPU cannot publish a 1080p60 30 Mbps test stream in real time, and the
+  fallback is fed about 5500 kbps on show day anyway.

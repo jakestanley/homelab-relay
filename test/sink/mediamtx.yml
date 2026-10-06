@@ -1,18 +1,23 @@
+# Local test sink for test/acceptance.py: a throwaway MediaMTX that accepts
+# any publish, over RTMP and over RTMPS with the self-signed certificate in
+# this directory (server.crt / server.key: test-only, never trusted by
+# anything, committed so Windows hosts need no openssl).
+#
+# Ports and certificate paths are set by environment from the harness:
+# MTX_RTMPADDRESS, MTX_RTMPSADDRESS, MTX_RTMPSERVERKEY, MTX_RTMPSERVERCERT.
 logLevel: info
+logDestinations: [stdout]
 rtsp: false
 hls: false
 webrtc: false
 srt: false
 moq: false
+api: false
 rtmpEncryption: optional
-rtmpServerKey: /server.key
-rtmpServerCert: /server.crt
-api: true
 authInternalUsers:
   - user: any
     permissions:
       - action: publish
       - action: read
-      - action: api
 paths:
   all_others:
