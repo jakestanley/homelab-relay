@@ -186,7 +186,13 @@ def apply(services, nssm, logs_dir, start=True, out=print):
             for param, values in step["settings"]:
                 nssm.set(name, param, *values)
             env = dict(service["env"], **{SPEC_VAR: step["hash"]})
-            nssm.set(name, "AppEnvironmentExtra", *["{}={}".format(k, v) for k, v in sorted(env.items())])
+            # Never pass an empty value: NSSM drops every entry after a
+            # "KEY=" one when it builds the process environment, so a
+            # disabled output (empty OUTPUT_KEY) lost OUTPUT_URL, OUTPUT_WIDTH
+            # and the rest, and crash-looped. Seen on shrike, NSSM 2.24-101.
+            # The wrappers read a missing variable as empty, so omitting it
+            # is the same value.
+            nssm.set(name, "AppEnvironmentExtra", *["{}={}".format(k, v) for k, v in sorted(env.items()) if v != ""])
         if not start:
             out("{:<32} {}".format(name, action + (" (not started)" if action != "unchanged" else "")))
             continue
