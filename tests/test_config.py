@@ -105,6 +105,21 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.output_env(config.outputs[0])["OUTPUT_VIDEO_ENCODER"], "libx264")
         self.assertIn("VIDEO_ENCODER", self.problems(env=GOOD_ENV + "VIDEO_ENCODER=hevc_nvenc\n"))
 
+    def test_copy_host_forwards_every_output_untouched(self):
+        config = self.load(env=GOOD_ENV + "VIDEO_ENCODER=copy\n")
+        for output in config.outputs:
+            env = config.output_env(output)
+            self.assertEqual(env["OUTPUT_VIDEO_ENCODER"], "copy")
+            self.assertNotIn("OUTPUT_WIDTH", env)
+
+    def test_copy_host_reports_ceilings_instead_of_refusing(self):
+        from relay.config import summary
+
+        config = self.load(env=GOOD_ENV + "VIDEO_ENCODER=copy\n")
+        twitch = [line for line in summary(config) if line.startswith("output twitch")][0]
+        self.assertIn("copy of ingest", twitch)
+        self.assertIn("under 6000 kbps", twitch)
+
     def test_status_never_gets_keys(self):
         config = self.load()
         text = repr(config.status_env())

@@ -30,7 +30,10 @@ INGEST_KEY_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 INGEST_KEY_PLACEHOLDER = "change-me-to-match-batw-STREAM_KEY_LIVE"
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 RESERVED_NAMES = {"mediamtx", "recorder", "status"}
-VIDEO_ENCODERS = ("h264_nvenc", "libx264")
+# "copy" makes a host forward ingest untouched to every output, whatever
+# relay.yaml's renditions say: a relay with no encoder to spare (the adler
+# fallback). It is a property of the host, so it lives in .env, not relay.yaml.
+VIDEO_ENCODERS = ("h264_nvenc", "libx264", COPY)
 
 RENDITION_FIELDS = ("width", "height", "fps", "video_kbps", "audio_kbps", "keyframe_seconds")
 OUTPUT_FIELDS = {"name", "url_env", "key_env", "tls_verify_env", "rendition", "max_kbps"}
@@ -176,6 +179,14 @@ class Config:
             renditions[name] = dict(r)
         return renditions
 
+    @property
+    def host_copies(self):
+        return self.video_encoder == COPY
+
+    def rendition_of(self, output):
+        """The rendition an output is actually sent: copy on a copy host."""
+        return COPY if self.host_copies else output["rendition"]
+
     def _outputs(self, raw):
         outputs = []
         if not isinstance(raw, list) or not raw:
@@ -214,6 +225,11 @@ class Config:
             if max_kbps is not None:
                 if not _positive_int(max_kbps):
                     self.problems.append("{}: max_kbps must be a positive whole number".format(where))
+                    continue
+                # On a copy host the publisher sets every output's bitrate;
+                # summary() repeats the ceiling instead of refusing.
+                if self.host_copies:
+                    outputs.append(dict(o))
                     continue
                 if rendition == COPY:
                     self.problems.append(
@@ -263,7 +279,7 @@ class Config:
                 "OUTPUT_TLS_VERIFY": (self.env.get(tls_env, "").strip() or "true") if tls_env else "true",
             }
         )
-        rendition = output["rendition"]
+        rendition = self.rendition_of(output)
         if rendition == COPY:
             env["OUTPUT_VIDEO_ENCODER"] = COPY
         else:
@@ -393,7 +409,10 @@ def summary(config):
     for o in config.outputs:
         env = config.output_env(o)
         enabled = env["OUTPUT_URL"] and (env["OUTPUT_KEY"] or env["OUTPUT_KEY_REQUIRED"] == "false")
-        lines.append("output {:<10} {:<9} {}".format(o["name"], "enabled" if enabled else "disabled", describe_rendition(env)))
+        line = "output {:<10} {:<9} {}".format(o["name"], "enabled" if enabled else "disabled", describe_rendition(env))
+        if config.host_copies and o.get("max_kbps"):
+            line += " (VIDEO_ENCODER=copy: OBS must stay under {} kbps)".format(o["max_kbps"])
+        lines.append(line)
     lines.append("recorder   copy of ingest to {}".format(config.record_dir))
     return lines
 

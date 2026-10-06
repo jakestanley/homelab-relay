@@ -84,8 +84,11 @@ platform means a slot in `relay.yaml`, and on Linux an `out-<slot>` service in
 Each output is sent its own rendition from `relay.yaml`: OBS sends one
 high-bitrate master, and each platform gets it re-encoded to its own limit
 (`VIDEO_ENCODER`: `h264_nvenc` on the GPU, `libx264` without one). An output
-whose rendition is `copy` is forwarded untouched instead, which needs no GPU
-and is how the relay ran before 2026-10-06. The recorder always copies.
+whose rendition is `copy` is forwarded untouched instead. `VIDEO_ENCODER=copy`
+in a host's `.env` does that for every output, whatever `relay.yaml` says:
+that is the adler fallback, the same checkout of `main` as shrike, with no
+encoder in the path and OBS setting every platform's bitrate (`up` prints each
+output's `max_kbps` as a reminder). The recorder always copies.
 
 ### When ingest drops
 
