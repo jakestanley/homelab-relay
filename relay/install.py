@@ -52,7 +52,10 @@ COMMON_SETTINGS = [
     ("AppStopMethodConsole", ["15000"]),
     ("AppKillProcessTree", ["1"]),
     ("AppRotateFiles", ["1"]),
-    ("AppRotateOnline", ["1"]),
+    # Rotate at service start only. With online rotation (1), NSSM 2.24 hangs
+    # in STOP_PENDING on every stop or restart: the service stays stuck until
+    # its nssm.exe is killed. Proved on shrike, 2026-10-06.
+    ("AppRotateOnline", ["0"]),
     ("AppRotateBytes", [str(LOG_ROTATE_BYTES)]),
 ]
 
@@ -150,8 +153,18 @@ def settings_for(service, logs_dir):
     return settings
 
 
+def applied_env(env):
+    """The environment as NSSM is given it. Never an empty value: NSSM drops
+    every entry after a "KEY=" one when it builds the process environment, so
+    a disabled output (empty OUTPUT_KEY) lost OUTPUT_URL, OUTPUT_WIDTH and the
+    rest and crash-looped. The wrappers read a missing variable as empty, so
+    omitting it is the same value."""
+    return {k: v for k, v in env.items() if v != ""}
+
+
 def spec_hash(service, settings):
-    doc = {"settings": settings, "env": sorted(service["env"].items())}
+    # Hash what is applied, so dropping empty values counts as a change.
+    doc = {"settings": settings, "env": sorted(applied_env(service["env"]).items())}
     return hashlib.sha256(json.dumps(doc, sort_keys=True).encode()).hexdigest()
 
 
@@ -185,14 +198,8 @@ def apply(services, nssm, logs_dir, start=True, out=print):
                 nssm.install(name, service["exe"])
             for param, values in step["settings"]:
                 nssm.set(name, param, *values)
-            env = dict(service["env"], **{SPEC_VAR: step["hash"]})
-            # Never pass an empty value: NSSM drops every entry after a
-            # "KEY=" one when it builds the process environment, so a
-            # disabled output (empty OUTPUT_KEY) lost OUTPUT_URL, OUTPUT_WIDTH
-            # and the rest, and crash-looped. Seen on shrike, NSSM 2.24-101.
-            # The wrappers read a missing variable as empty, so omitting it
-            # is the same value.
-            nssm.set(name, "AppEnvironmentExtra", *["{}={}".format(k, v) for k, v in sorted(env.items()) if v != ""])
+            env = dict(applied_env(service["env"]), **{SPEC_VAR: step["hash"]})
+            nssm.set(name, "AppEnvironmentExtra", *["{}={}".format(k, v) for k, v in sorted(env.items())])
         if not start:
             out("{:<32} {}".format(name, action + (" (not started)" if action != "unchanged" else "")))
             continue

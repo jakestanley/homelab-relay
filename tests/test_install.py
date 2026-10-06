@@ -108,6 +108,16 @@ class ApplyTests(unittest.TestCase):
         self.assertFalse([v for v in values if v.endswith("=")])
         self.assertNotIn("OUTPUT_KEY", nssm.services["homelab-relay-out-twitch"]["env"])
 
+    def test_dropping_an_empty_value_is_a_change(self):
+        nssm = FakeNssm()
+        apply(services(twitch_key=""), nssm, "logs", out=lambda line: None)
+        twitch = nssm.services["homelab-relay-out-twitch"]
+        # A service applied before empty values were dropped carries them.
+        twitch["env"] = dict(twitch["env"], OUTPUT_KEY="", **{SPEC_VAR: "old"})
+        nssm.calls.clear()
+        apply(services(twitch_key=""), nssm, "logs", out=lambda line: None)
+        self.assertIn(("restart", "homelab-relay-out-twitch"), nssm.actions("restart"))
+
     def test_removed_slot_is_removed(self):
         remaining = services()[:2]
         remove_orphans(remaining, self.nssm, "homelab-relay", out=self.lines.append)
