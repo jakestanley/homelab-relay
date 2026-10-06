@@ -182,6 +182,7 @@ class StatusApp:
             "state": state,
             "detail": detail,
             "destination": report.get("destination"),
+            "rendition": report.get("rendition"),
             "bytes": report.get("bytes", 0),
             "runs": report.get("runs", 0),
             "last_exit": _public_exit(report.get("last_exit")),

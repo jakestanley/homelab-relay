@@ -143,6 +143,7 @@ class FetchIngestTests(unittest.TestCase):
 
         server = HTTPServer(("127.0.0.1", 0), Handler)
         threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
         return "http://127.0.0.1:{}".format(server.server_port)
 

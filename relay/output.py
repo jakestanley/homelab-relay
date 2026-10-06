@@ -3,15 +3,21 @@
 Its jobs are fixed by deviation 1b in prompts/init.md, and it does nothing else:
 
 - idle when disabled, and wait for ingest rather than exiting when enabled;
-- run ffmpeg with the configured destination, key and I/O timeout;
+- run ffmpeg with the configured destination, key, rendition and I/O
+  timeout;
 - expose a progress counter the status glue can read (a JSON file in
   RELAY_STATE_DIR);
 - redact the key from anything it logs.
 
 It never exits because ffmpeg exited. Whether ffmpeg ended because ingest
 stopped, the platform dropped it or the I/O timeout fired, the wrapper goes
-back to waiting for ingest. The runtime's restart policy (Docker
-`restart: always`) only covers the wrapper itself crashing.
+back to waiting for ingest. The runtime's restart policy (NSSM's default
+"restart on exit") only covers the wrapper itself crashing.
+
+The rendition is fixed configuration, not a decision: OUTPUT_VIDEO_ENCODER and
+the OUTPUT_WIDTH..OUTPUT_KEYFRAME_SECONDS values arrive in the environment,
+compiled from relay.yaml at install time (relay.config), and this file only
+turns them into ffmpeg arguments.
 """
 
 import os
@@ -23,6 +29,8 @@ import urllib.parse
 from datetime import datetime, timezone
 
 from relay.common import (
+    COPY,
+    describe_rendition,
     env_bool,
     env_float,
     env_str,
@@ -41,6 +49,18 @@ MAX_RETRY_DELAY = 10.0
 # failure starts the retry delay from the bottom again.
 HEALTHY_RUN_SECONDS = 30.0
 API_WARN_AFTER_SECONDS = 5.0
+RENDITION_VARS = (
+    "OUTPUT_WIDTH",
+    "OUTPUT_HEIGHT",
+    "OUTPUT_FPS",
+    "OUTPUT_VIDEO_KBPS",
+    "OUTPUT_AUDIO_KBPS",
+    "OUTPUT_KEYFRAME_SECONDS",
+)
+# On Windows, NSSM stops a service with Ctrl+C to its console. ffmpeg runs in
+# its own process group so that only the wrapper receives it, and the wrapper
+# then ends ffmpeg itself rather than racing it to the exit.
+POPEN_FLAGS = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
 
 stop_event = threading.Event()
 
@@ -62,6 +82,22 @@ class Wrapper:
         self.key_required = env_bool("OUTPUT_KEY_REQUIRED", False)
         self.tls_verify = env_bool("OUTPUT_TLS_VERIFY", True)
         self.record_dir = env_str("RECORD_DIR")
+        self.ffmpeg = env_str("FFMPEG_EXE", "ffmpeg")
+        self.encoder = env_str("OUTPUT_VIDEO_ENCODER", COPY)
+        if self.kind == "record" and self.encoder != COPY:
+            # The archive is the untouched ingest stream, always.
+            raise SystemExit("the recorder only copies; OUTPUT_VIDEO_ENCODER must be copy")
+        self.rendition = None
+        if self.encoder != COPY:
+            if self.encoder not in ("h264_nvenc", "libx264"):
+                raise SystemExit("OUTPUT_VIDEO_ENCODER {!r} is not supported".format(self.encoder))
+            try:
+                self.rendition = {var: int(env_str(var)) for var in RENDITION_VARS}
+            except ValueError:
+                raise SystemExit("{} must all be set to whole numbers".format(", ".join(RENDITION_VARS)))
+        self.rendition_label = describe_rendition(
+            {k: v for k, v in os.environ.items() if k.startswith("OUTPUT_")}
+        )
 
         self.source = env_str("RELAY_SOURCE_URL")
         self.api_url = env_str("RELAY_API_URL")
@@ -122,6 +158,7 @@ class Wrapper:
             "enabled": self.disabled_reason() is None,
             "disabled_reason": self.disabled_reason(),
             "destination": self.destination_label(),
+            "rendition": self.rendition_label,
             "phase": self.phase,
             "heartbeat": time.time(),
             "runs": self.runs,
@@ -163,9 +200,10 @@ class Wrapper:
             return
 
         self.log.info(
-            "output %s enabled; destination %s; waiting for ingest",
+            "output %s enabled; destination %s; %s; waiting for ingest",
             self.name,
             self.destination_label(),
+            self.rendition_label,
         )
         failures = 0
         while not stop_event.is_set():
@@ -234,13 +272,21 @@ class Wrapper:
     def build_command(self):
         timeout_us = str(int(self.io_timeout * 1_000_000))
         cmd = [
-            "ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "warning",
+            self.ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "warning",
             "-nostats", "-progress", "pipe:1", "-stats_period", "1",
         ]
         if self.kind == "record":
             # -n: refuse to overwrite, as a second guard behind the unique name.
             cmd.append("-n")
-        cmd += ["-rw_timeout", timeout_us, "-i", self.source, "-map", "0", "-c", "copy"]
+        if self.encoder == "h264_nvenc":
+            # Decode on the GPU as well, so frames stay in GPU memory from
+            # decode through scaling to encode.
+            cmd += ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"]
+        cmd += ["-rw_timeout", timeout_us, "-i", self.source]
+        if self.rendition is None:
+            cmd += ["-map", "0", "-c", "copy"]
+        else:
+            cmd += self.rendition_args()
 
         if self.kind == "record":
             path = self.new_recording_path()
@@ -256,6 +302,43 @@ class Wrapper:
             # that one slot (the self-signed test sink only).
             cmd += ["-tls_verify", "1" if self.tls_verify else "0"]
         return cmd + ["-f", "flv", join_destination(self.url, self.key)], None
+
+    def rendition_args(self):
+        """Encode to this output's rendition: constant bitrate, fixed GOP.
+
+        Platforms want CBR and a keyframe every keyframe_seconds exactly, so
+        scene-cut keyframes are off. The input is assumed to be 16:9 (batw's
+        canvas is), and is scaled to the rendition's size without padding.
+        """
+        r = self.rendition
+        fps, w, h = r["OUTPUT_FPS"], r["OUTPUT_WIDTH"], r["OUTPUT_HEIGHT"]
+        gop = str(fps * r["OUTPUT_KEYFRAME_SECONDS"])
+        video = "{}k".format(r["OUTPUT_VIDEO_KBPS"])
+        # Audio is optional at ingest ("?"), so a silent publisher still
+        # streams.
+        args = ["-map", "0:v:0", "-map", "0:a:0?", "-fps_mode", "cfr"]
+        if self.encoder == "h264_nvenc":
+            args += [
+                "-vf", "fps={},scale_cuda={}:{}".format(fps, w, h),
+                "-c:v", "h264_nvenc", "-preset", "p5", "-tune", "hq", "-profile:v", "high",
+                "-rc", "cbr", "-b:v", video, "-maxrate", video, "-bufsize", video,
+                "-g", gop, "-bf", "2", "-no-scenecut", "1", "-forced-idr", "1",
+                "-spatial-aq", "1",
+            ]
+        else:
+            # libx264: for running the acceptance checks on a host with no
+            # NVIDIA GPU. Never what a broadcast uses.
+            args += [
+                "-vf", "fps={},scale={}:{},format=yuv420p".format(fps, w, h),
+                "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "high",
+                "-b:v", video, "-maxrate", video, "-bufsize", video,
+                "-g", gop, "-keyint_min", gop, "-sc_threshold", "0", "-bf", "2",
+                "-x264-params", "nal-hrd=cbr",
+            ]
+        args += [
+            "-c:a", "aac", "-b:a", "{}k".format(r["OUTPUT_AUDIO_KBPS"]), "-ar", "48000", "-ac", "2",
+        ]
+        return args
 
     def run_ffmpeg(self):
         """Run ffmpeg until it exits. Returns seconds of delivery observed."""
@@ -278,6 +361,7 @@ class Wrapper:
             text=True,
             errors="replace",
             bufsize=1,
+            creationflags=POPEN_FLAGS,
         )
         readers = [
             threading.Thread(target=self._read_progress, args=(proc.stdout,), daemon=True),
@@ -306,6 +390,10 @@ class Wrapper:
                 proc.wait()
         for t in readers:
             t.join(timeout=2)
+        # Each run opens two pipes; close them, or a long idle with retries
+        # leaks handles (on Windows especially).
+        for stream in (proc.stdout, proc.stderr):
+            stream.close()
 
         first_progress = self._first_progress
         delivered_for = (
@@ -328,6 +416,8 @@ class Wrapper:
         """Belt and braces behind -rw_timeout: a stall must become an exit."""
         now = time.time()
         if self.last_progress is None:
+            # Generous: probing ingest takes about 3 s, and an encoder adds
+            # its own start-up before the first byte goes out.
             limit = self.io_timeout + 20
             if now - self.run_started > limit:
                 return "delivered no data within {:.0f}s of starting".format(limit)

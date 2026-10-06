@@ -1,0 +1,3 @@
+# Install-time only: relay.config reads relay.yaml. The broadcast-path
+# processes (relay.output, relay.status) use the standard library alone.
+PyYAML==6.0.2

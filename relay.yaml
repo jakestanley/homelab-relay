@@ -1,0 +1,83 @@
+# homelab-relay: output slots and the rendition each one is encoded to.
+#
+# Committed, and holds no secrets: URLs and keys stay in .env, named here by
+# variable. scripts/up.ps1 compiles this file and .env into each service's
+# environment, so an edit here takes effect on the next up.ps1, and only the
+# services it changes are restarted.
+#
+# Adding a platform is an edit here, which is deliberate: it is rare and
+# explicit (prompts/init.md, Fan-out).
+
+# What each platform is sent. Every value is explicit: there are no defaults,
+# so this file says everything a platform receives.
+#
+# Numbers from batw ROADMAP.md (2026-10-06):
+# - Twitch: 6000 kbps ceiling for non-partners, video plus audio. A GPU does
+#   not raise it. 936p60 at 5500 looked better than 1080p60 at 6000, which
+#   is under-provisioned for 60 fps.
+# - YouTube: takes 9000 and more at 1080p60.
+# - Facebook: up to 15000, recommends 6000-9000 at 1080p60.
+# Re-check against each platform's current guidance before relying on them.
+#
+# keyframe_seconds is 2 for all three: Twitch requires it and the others
+# recommend it.
+renditions:
+  twitch:
+    width: 1664
+    height: 936
+    fps: 60
+    video_kbps: 5500
+    audio_kbps: 160
+    keyframe_seconds: 2
+  youtube:
+    width: 1920
+    height: 1080
+    fps: 60
+    video_kbps: 9000
+    audio_kbps: 160
+    keyframe_seconds: 2
+  facebook:
+    width: 1920
+    height: 1080
+    fps: 60
+    video_kbps: 8000
+    audio_kbps: 160
+    keyframe_seconds: 2
+
+# One service per entry, plus the recorder (always a copy of ingest, never
+# re-encoded) and the status page.
+#
+# - url_env / key_env: the .env variables holding the platform's ingest URL
+#   and stream key. An output is disabled when its URL is empty, or when it
+#   names a key_env and that key is empty.
+# - rendition: a name from above, or `copy` to send ingest untouched.
+# - max_kbps: the platform's ceiling, video plus audio. up.ps1 refuses a
+#   rendition over it. Omit where no ceiling has been confirmed.
+# - tls_verify_env: test sinks only. Names a variable that may set "false"
+#   for a self-signed sink. Never give a platform one (prompts/init.md,
+#   deviation 2).
+outputs:
+  - name: twitch
+    url_env: TWITCH_URL
+    key_env: STREAM_KEY_TWITCH
+    rendition: twitch
+    max_kbps: 6000
+  - name: youtube
+    url_env: YOUTUBE_URL
+    key_env: STREAM_KEY_YOUTUBE
+    rendition: youtube
+  - name: facebook
+    url_env: FACEBOOK_URL
+    key_env: STREAM_KEY_FACEBOOK
+    rendition: facebook
+    max_kbps: 15000
+  # Test sinks: disabled unless their URL is set. Each uses a platform's
+  # rendition, so the path under test is the real one.
+  - name: sink-a
+    url_env: SINK_A_URL
+    tls_verify_env: SINK_A_TLS_VERIFY
+    rendition: twitch
+  - name: sink-b
+    url_env: SINK_B_URL
+    tls_verify_env: SINK_B_TLS_VERIFY
+    rendition: youtube

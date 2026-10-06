@@ -53,7 +53,7 @@
 
   <section class="card">
     <table>
-      <thead><tr><th>Output</th><th>State</th><th>Detail</th><th class="dest">Destination</th></tr></thead>
+      <thead><tr><th>Output</th><th>State</th><th>Detail</th><th class="dest">Rendition</th><th class="dest">Destination</th></tr></thead>
       <tbody id="outputs"></tbody>
     </table>
   </section>
@@ -112,6 +112,7 @@
       { text: o.name },
       { node: badge(o.state) },
       { text: o.state === "connected" ? o.detail + " · " + bytes(o.bytes) : o.detail },
+      { text: o.rendition || "", cls: "dest" },
       { text: o.destination || "", cls: "dest" },
     ])));
 

@@ -144,6 +144,13 @@
             ],
             "description": "Configured URL without the stream key, or the recording file name."
           },
+          "rendition": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What this output sends: size, frame rate, video+audio kbps and encoder, or \"copy of ingest\". Never contains a key."
+          },
           "bytes": {
             "type": "integer",
             "description": "Bytes delivered in the current run."
