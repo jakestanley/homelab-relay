@@ -557,7 +557,16 @@ class Wrapper:
 def main():
     signal.signal(signal.SIGTERM, _handle_stop)
     signal.signal(signal.SIGINT, _handle_stop)
-    Wrapper().run()
+    wrapper = Wrapper()
+    try:
+        wrapper.run()
+    finally:
+        # Told to stop (NSSM, docker stop, scripts/stop.sh): say so, so the
+        # page shows "stopped" rather than "failed". A crash never gets
+        # here, and still reads as failed once its report goes stale.
+        if stop_event.is_set():
+            wrapper.phase = "stopped"
+            wrapper.write_report()
 
 
 if __name__ == "__main__":

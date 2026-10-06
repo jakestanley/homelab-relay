@@ -104,6 +104,16 @@ class DeriveStateTests(unittest.TestCase):
         self.assertEqual(self.state(stale, live=False), "unknown")
 
 
+    def test_deliberately_stopped_output_is_stopped_not_failed(self):
+        stopped = report(phase="stopped", heartbeat=NOW - 600)
+        self.assertEqual(self.state(stopped, live=True), "stopped")
+        self.assertEqual(self.state(stopped, live=False), "stopped")
+
+    def test_crashed_output_is_still_failed(self):
+        crashed = report(phase="running", heartbeat=NOW - 60)
+        self.assertEqual(self.state(crashed, live=True), "failed")
+
+
 class RedactionTests(unittest.TestCase):
     def test_redacts_raw_and_encoded_forms(self):
         key = "live_123/abc?bandwidthtest=true"

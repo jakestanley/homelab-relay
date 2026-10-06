@@ -125,6 +125,7 @@
           "state": {
             "type": "string",
             "enum": [
+              "stopped",
               "disabled",
               "idle",
               "connecting",
@@ -132,7 +133,7 @@
               "failed",
               "unknown"
             ],
-            "description": "disabled: URL empty or named key empty. idle: no ingest, nothing to push. connecting: push started, no data yet. connected: byte counter advancing. failed: ingest live but this output is not delivering. unknown: output process not reporting while there is no ingest."
+            "description": "stopped: the output's service or container was stopped on purpose. disabled: URL empty or named key empty. idle: no ingest, nothing to push. connecting: push started, no data yet. connected: byte counter advancing. failed: ingest live but this output is not delivering. unknown: output process not reporting while there is no ingest."
           },
           "detail": {
             "type": "string"
