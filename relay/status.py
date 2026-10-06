@@ -10,6 +10,7 @@ It is never given platform keys, so it cannot leak one.
 import json
 import os
 import shutil
+import signal
 import threading
 import time
 from datetime import datetime, timezone
@@ -43,9 +44,13 @@ def derive_output_state(report, ingest_live, ingest_since, now):
     whatever its process is doing. The page is mostly read before a
     broadcast, when idling is normal, and must not report it as failure.
 
-    Returns (state, detail). States: disabled, idle, connecting, connected,
-    failed, unknown.
+    Returns (state, detail). States: stopped, disabled, idle, connecting,
+    connected, failed, unknown.
     """
+    if report is not None and report.get("phase") == "stopped":
+        # The wrapper's last word on a deliberate stop. Checked before the
+        # staleness test: a stopped output is not reporting, by design.
+        return "stopped", "stopped on purpose (service or container stopped)"
     if report is None or now - report.get("heartbeat", 0) > REPORT_STALE_SECONDS:
         if ingest_live:
             return "failed", "output process is not reporting"
@@ -303,7 +308,20 @@ def main():
     app.watcher.start()
     server = ThreadingHTTPServer(("0.0.0.0", port), make_handler(app))
     log.info("status page listening on :%d", port)
-    server.serve_forever()
+    # In a container this is PID 1, which gets no default signal handling:
+    # without a handler `docker stop` waited its full 10 s and then killed it
+    # (exit 137). NSSM's Ctrl+C on Windows arrives as SIGINT.
+    signal.signal(signal.SIGTERM, _stop)
+    signal.signal(signal.SIGINT, _stop)
+    try:
+        server.serve_forever()
+    finally:
+        server.server_close()
+        log.info("status page stopped")
+
+
+def _stop(signum, frame):
+    raise SystemExit(0)
 
 
 if __name__ == "__main__":
