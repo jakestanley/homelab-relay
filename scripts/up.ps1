@@ -14,10 +14,16 @@ In order: preflight on the sibling standards repos (warn; never pull),
 firewall rules for the RTMP and status ports, then the NSSM services.
 Must run elevated: installing services and firewall rules needs it.
 Non-interactive (Ansible): never prompts, refuses where it would have asked.
+
+-Restart additionally restarts every service after applying, so pulled code
+takes effect. It is what hosts-shrike's services role passes on every deploy,
+and like install-service.ps1 -Start it interrupts a broadcast: never deploy
+with it while ingest is live.
 #>
 param(
     [string]$ServiceName,
-    [string]$PythonExe
+    [string]$PythonExe,
+    [switch]$Restart
 )
 
 $ErrorActionPreference = "Stop"
@@ -106,6 +112,10 @@ foreach ($rule in $rules) {
 $nssm = Resolve-Nssm
 & $py -m relay.install apply --prefix $ServiceName --env $EnvFile --nssm $nssm
 $code = $LASTEXITCODE
+if ($code -eq 0 -and $Restart) {
+    & $py -m relay.install restart --prefix $ServiceName --env $EnvFile --nssm $nssm
+    $code = $LASTEXITCODE
+}
 
 Write-Host "== homelab-relay up: END"
 exit $code
