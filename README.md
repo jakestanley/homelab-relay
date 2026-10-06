@@ -38,7 +38,8 @@ OBS ──RTMP──▶ mediamtx (:1935, ingest only)
 - **MediaMTX** accepts ingest and nothing else. It allows publishing only on
   `live/<INGEST_KEY>`, so a publish with the wrong key is rejected.
 - **Each output is its own long-running process**: a small Python wrapper
-  (`relay/output.py`) running `ffmpeg -c copy`. Nothing is re-encoded.
+  (`relay/output.py`) running ffmpeg, which re-encodes to that output's
+  rendition, or copies for a `copy` rendition and for the recorder.
 - **The wrapper waits for ingest itself**, polling the MediaMTX API every
   second, and starts ffmpeg as soon as ingest appears. When ffmpeg exits,
   whether because ingest stopped, the platform dropped the connection or the
@@ -63,8 +64,8 @@ OBS ──RTMP──▶ mediamtx (:1935, ingest only)
 
 ### Output slots and on/off
 
-Outputs are a fixed set of named slots in `docker-compose.yml`. Each slot has
-a URL and an optional key, both set in `.env`:
+Outputs are named slots in `relay.yaml`. Each slot has a URL and an optional
+key, both set in `.env`, and a rendition (below):
 
 | Slot | URL variable | Key variable | Disabled when |
 | --- | --- | --- | --- |
@@ -74,15 +75,17 @@ a URL and an optional key, both set in `.env`:
 | sink-a | `SINK_A_URL` | none | URL empty (default) |
 | sink-b | `SINK_B_URL` | none | URL empty (default) |
 
-**To leave a platform out of a broadcast, clear its key and run
-`scripts/up.sh`.** A disabled output logs one "disabled" line, makes no
-connection and shows as *disabled* on the page. Adding a new platform means
-adding a slot to `docker-compose.yml` and its name to `RELAY_OUTPUTS`.
+**To leave a platform out of a broadcast, clear its key and re-run up**
+(`scripts\up.ps1` or `scripts/up.sh`). A disabled output logs one "disabled"
+line, makes no connection and shows as *disabled* on the page. Adding a new
+platform means a slot in `relay.yaml`, and on Linux an `out-<slot>` service in
+`docker-compose.yml` (`up.sh` refuses to start if the two disagree).
 
-Every platform receives exactly what OBS sends: one bitrate, one resolution.
-Configure OBS for the most restrictive platform, currently Facebook.
-Per-platform renditions are a non-goal; see the Portability section of the
-spec for when that would be revisited.
+Each output is sent its own rendition from `relay.yaml`: OBS sends one
+high-bitrate master, and each platform gets it re-encoded to its own limit
+(`VIDEO_ENCODER`: `h264_nvenc` on the GPU, `libx264` without one). An output
+whose rendition is `copy` is forwarded untouched instead, which needs no GPU
+and is how the relay ran before 2026-10-06. The recorder always copies.
 
 ### When ingest drops
 
@@ -91,8 +94,8 @@ When OBS reconnects, every enabled output reconnects without intervention.
 In testing, all outputs were delivering again 8 s after the publisher
 restarted (see [TESTING.md](TESTING.md)). Each platform treats that as a new
 session. The relay
-does not generate filler to hold connections open (that would mean
-transcoding, and the host has no GPU). During a gap the page reads **no
+does not yet generate filler to hold connections open (a slate is planned
+now that outputs transcode; see batw's roadmap). During a gap the page reads **no
 ingest**, not "failed".
 
 Every gap is logged with start, end and duration by the status service
@@ -124,11 +127,12 @@ left to the proxy.
 
 ## Running it
 
-Docker on adler (Linux) is the runtime. Images are built once, tested, and
-then run by tag:
+Two platforms, one configuration (see [Platforms](#platforms)). On Windows,
+`scripts\up.ps1` from an elevated PowerShell; hosts-shrike's Ansible runs it.
+On Linux, images are built once, tested, and then run by tag:
 
 ```sh
-scripts/build.sh 2026-09-23            # builds homelab-relay[-mediamtx]:2026-09-23
+scripts/build.sh 2026-09-23            # builds homelab-relay:2026-09-23
 test/acceptance.sh 2026-09-23          # the sink checks, against that exact image
 cp .env.example .env                   # set RELAY_IMAGE_TAG=2026-09-23, INGEST_KEY,
                                        # RECORD_DIR and the platform keys
@@ -137,8 +141,9 @@ scripts/up.sh
 
 **`scripts/up.sh` never builds.** It runs the preflight checks on
 `homelab-standards` and `homelab-infra` (warn and ask, never pull), syncs
-`imported/`, checks `.env`, creates `RECORD_DIR` if missing, checks that the
-images for `RELAY_IMAGE_TAG` exist, then runs `docker compose up -d`. So the
+`imported/`, checks `.env`, checks that the image for `RELAY_IMAGE_TAG`
+exists, validates the configuration inside it, creates `RECORD_DIR` if
+missing, then runs `docker compose up -d`. So the
 image that passed the acceptance checks is the image that runs on the night.
 Re-running `up.sh` against a running relay recreates nothing unless `.env`
 changed, and then only the affected container: changing one platform key
@@ -157,8 +162,9 @@ shows: build a new tag, run `test/acceptance.sh` on it, then point
 **never switch tags mid-broadcast**.
 
 The Compose project name is fixed (`homelab-relay`), so it can be deployed
-from an ephemeral clone (`PATTERNS/checkout-topology.md`). The MediaMTX config
-is baked into its image rather than bind-mounted, so removing the clone
+from an ephemeral clone (`PATTERNS/checkout-topology.md`). `relay.yaml` and
+the MediaMTX config are baked into the image rather than bind-mounted, so
+changing either means a new tag, and removing the clone
 afterwards is safe. Runtime state lives outside the tree: recordings in
 `RECORD_DIR`, wrapper reports in the `state` volume.
 
@@ -178,7 +184,7 @@ report files, and never given to the status service. Anyone who can run
 The ingest key may contain only letters, digits, `_`, `.` and `-`. It becomes
 a MediaMTX path name (`live/<key>`), and MediaMTX refuses any other character,
 before it even compares the key. A base64 key with `=` or `+` is refused on
-every publish. `up.sh` checks this (`scripts/check-ingest-key.sh`) before
+every publish. Both up scripts check this (through `relay.config`) before
 starting anything. `python3 -c "import secrets; print(secrets.token_urlsafe(32))"`
 generates a suitable key.
 
@@ -200,8 +206,8 @@ The registry entry is `stream-relay`, not `relay`. This deliberately overrides
 the default rule that `homelab-<name>` maps to registry entry `<name>`,
 because the entry name matches the status page's DNS name.
 
-Neither port is exposed outside the LAN. The MediaMTX API (:9997) is reachable
-only on the Compose network.
+Neither port is exposed outside the LAN. The MediaMTX API (`RELAY_API_PORT`,
+default 9997) listens on loopback only, on both platforms.
 
 ### Archive
 
@@ -288,16 +294,25 @@ Clear both URLs before a real broadcast.
   no per-output supervision. The spec requires one process per output, with
   progress evidenced by the output's own counters.
 
-## Windows story
+## Platforms
 
-Linux is the target today. If the relay moves to the Windows host (see the
-spec's Portability section for what would justify it), the shape becomes:
-`mediamtx.exe` with `mediamtx/mediamtx.yml`, and the same Python modules
-(`python -m relay.output`, `python -m relay.status`) under NSSM, one NSSM
-service per output, with `scripts/install-service.ps1`, `scripts/up.ps1` and
-the firewall rule required by `homelab-standards`. The code is ready for
-that: configuration is environment only (MediaMTX's key override is an
-environment variable too), there are no hardcoded POSIX paths, no shelling
-out, free space comes from `shutil.disk_usage`, and the wrapper handles
-SIGTERM and SIGINT. nginx would no longer be on the same host, which reopens
-the host-and-vhost decision recorded in the spec.
+The relay runs on Windows (shrike, NVIDIA, the show path from 2026-10-06) and
+on Linux (Docker). Both take every process's program, arguments and
+environment from `Config.services()` in `relay/config.py`, so renditions,
+keys, validation and the never-a-key-in-the-status-page rule are one piece
+of code:
+
+| | Windows | Linux |
+| --- | --- | --- |
+| Entry point | `scripts\up.ps1` | `scripts/up.sh` |
+| Supervision | one NSSM service per process (`relay.install`) | one container per process, `restart: always` |
+| Config applied | at install, into each service's environment | at container start (`relay.run`) |
+| Binaries | pinned MediaMTX and ffmpeg in `tools\` (`fetch-tools.ps1`) | pinned MediaMTX and Debian ffmpeg in the image |
+| Networking | loopback between processes | host networking, so the same loopback addresses |
+
+Two NSSM 2.24 behaviours shape `relay.install`: it never passes an empty
+environment value (NSSM drops every entry after one), and logs rotate only at
+service start (online rotation leaves every stop hung in `STOP_PENDING`).
+
+On Windows, nginx is not on the same host, which reopens the host-and-vhost
+decision recorded in the spec.

@@ -1,0 +1,66 @@
+# homelab-relay on Linux: one RTMP ingest, fanned out to several platforms.
+#
+# Every container runs `python -m relay.run <service>`: the same processes,
+# arguments and environment that scripts/up.ps1 installs as NSSM services on
+# Windows, from the same Config.services(). Output slots and renditions live
+# in relay.yaml, not here; a slot added there needs a matching out-<slot>
+# service below (up.sh checks they agree).
+#
+# Host networking, so the processes reach each other on loopback exactly as
+# on Windows: MediaMTX's API stays on 127.0.0.1, and only RTMP_PORT and
+# SERVICE_PORT are listened on publicly.
+#
+# Supervision: every service is its own container with `restart: always`.
+# The wrapper re-runs ffmpeg whenever it exits, so an output failing never
+# exits a container.
+#
+# Nothing on the broadcast path is built here. scripts/build.sh builds dated
+# images once; RELAY_IMAGE_TAG in .env selects the one that passed the
+# acceptance checks, so the image tested is the image that runs.
+name: homelab-relay
+
+x-relay: &relay
+  image: homelab-relay:${RELAY_IMAGE_TAG:?RELAY_IMAGE_TAG must be set in .env (see scripts/build.sh)}
+  pull_policy: never
+  restart: always
+  network_mode: host
+  user: "${RELAY_UID:-1000}:${RELAY_GID:-1000}"
+  env_file: .env
+  # Container paths win over .env, where they are host (or Windows) paths.
+  environment: &container-paths
+    FFMPEG_EXE: /usr/bin/ffmpeg
+    MEDIAMTX_EXE: /usr/local/bin/mediamtx
+    RELAY_STATE_DIR: /state
+    RECORD_DIR: /recordings
+  volumes:
+    - state:/state
+    - ${RECORD_DIR:?RECORD_DIR must be set in .env}:/recordings
+
+services:
+  mediamtx:
+    <<: *relay
+    command: ["python", "-m", "relay.run", "mediamtx"]
+  out-twitch:
+    <<: *relay
+    command: ["python", "-m", "relay.run", "out-twitch"]
+  out-youtube:
+    <<: *relay
+    command: ["python", "-m", "relay.run", "out-youtube"]
+  out-facebook:
+    <<: *relay
+    command: ["python", "-m", "relay.run", "out-facebook"]
+  out-sink-a:
+    <<: *relay
+    command: ["python", "-m", "relay.run", "out-sink-a"]
+  out-sink-b:
+    <<: *relay
+    command: ["python", "-m", "relay.run", "out-sink-b"]
+  recorder:
+    <<: *relay
+    command: ["python", "-m", "relay.run", "recorder"]
+  status:
+    <<: *relay
+    command: ["python", "-m", "relay.run", "status"]
+
+volumes:
+  state:

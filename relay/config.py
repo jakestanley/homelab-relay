@@ -4,7 +4,8 @@ relay.yaml (committed) names the output slots and the rendition each is
 encoded to. .env (never committed) holds ports, paths, URLs and keys. This
 module validates both and turns them into one flat environment per service.
 
-It runs at install time only (relay.install, test/acceptance.py). The
+It runs at install time (relay.install on Windows, test/acceptance.py) and
+at container start (relay.run on Linux). The
 broadcast-path processes never read either file: each gets a flat
 environment, so what a running output does is fixed by what was applied to
 its service, and nothing changes under it until that service is restarted.
@@ -351,6 +352,12 @@ def load(env_path, config_path=DEFAULT_CONFIG, root=ROOT, overrides=None):
     else:
         env = read_dotenv(env_path)
     env.update(overrides or {})
+    return load_env(env, config_path, root, problems)
+
+
+def load_env(env, config_path=DEFAULT_CONFIG, root=ROOT, problems=None):
+    """Validate an environment already read (a container's, on Linux)."""
+    problems = list(problems or [])
     try:
         with open(config_path, encoding="utf-8") as fh:
             doc = yaml.safe_load(fh) or {}
@@ -375,12 +382,20 @@ def main(argv=None):
         for problem in exc.problems:
             print("config: " + problem, file=sys.stderr)
         return 1
+    for line in summary(config):
+        print(line)
+    return 0
+
+
+def summary(config):
+    """Which outputs are enabled and what each is sent; never a key."""
+    lines = []
     for o in config.outputs:
         env = config.output_env(o)
         enabled = env["OUTPUT_URL"] and (env["OUTPUT_KEY"] or env["OUTPUT_KEY_REQUIRED"] == "false")
-        print("output {:<10} {:<9} {}".format(o["name"], "enabled" if enabled else "disabled", describe_rendition(env)))
-    print("recorder   copy of ingest to {}".format(config.record_dir))
-    return 0
+        lines.append("output {:<10} {:<9} {}".format(o["name"], "enabled" if enabled else "disabled", describe_rendition(env)))
+    lines.append("recorder   copy of ingest to {}".format(config.record_dir))
+    return lines
 
 
 
