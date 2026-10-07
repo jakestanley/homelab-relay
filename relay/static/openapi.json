@@ -297,6 +297,44 @@
                 "type": "string"
               }
             }
+          },
+          "relay": {
+            "type": "object",
+            "description": "Where OBS publishes to this relay and how it treats the stream. Never contains a key.",
+            "properties": {
+              "ingest_url": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "RTMP URL OBS publishes to, without the key: this machine's own name (RELAY_INGEST_HOST), never a status-page vhost."
+              },
+              "stream_key": {
+                "type": "string",
+                "description": "Which secret is the stream key; never its value."
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "transcode",
+                  "copy"
+                ],
+                "description": "transcode: each platform gets its own rendition. copy: ingest is forwarded untouched (VIDEO_ENCODER=copy)."
+              },
+              "encoder": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "max_publish_kbps": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "copy mode only: the lowest platform ceiling, which OBS must stay under."
+              }
+            }
           }
         }
       }

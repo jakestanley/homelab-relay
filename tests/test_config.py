@@ -120,6 +120,17 @@ class ConfigTests(unittest.TestCase):
         self.assertIn("copy of ingest", twitch)
         self.assertIn("under 6000 kbps", twitch)
 
+    def test_status_page_shows_where_obs_publishes(self):
+        config = self.load(env=GOOD_ENV + "RELAY_INGEST_HOST=shrike.stanley.arpa\n")
+        env = config.status_env()
+        self.assertEqual(env["RELAY_INGEST_URL"], "rtmp://shrike.stanley.arpa:1935/live")
+        self.assertNotIn("Acc3pt_ingest-key.v1", env["RELAY_INGEST_URL"])
+        self.assertEqual((env["RELAY_MODE"], env["RELAY_PUBLISH_CEILING_KBPS"]), ("transcode", ""))
+
+    def test_copy_host_status_carries_the_publish_ceiling(self):
+        env = self.load(env=GOOD_ENV + "VIDEO_ENCODER=copy\n").status_env()
+        self.assertEqual((env["RELAY_MODE"], env["RELAY_PUBLISH_CEILING_KBPS"]), ("copy", "6000"))
+
     def test_status_never_gets_keys(self):
         config = self.load()
         text = repr(config.status_env())

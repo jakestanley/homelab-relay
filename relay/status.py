@@ -172,6 +172,15 @@ class StatusApp:
         self.record_dir = env_str("RECORD_DIR")
         self.record_dir_label = env_str("RECORD_DIR_LABEL") or self.record_dir
         self.min_free_bytes = int(env_float("RECORD_MIN_FREE_GB", 20.0) * 1024 ** 3)
+        ceiling = env_str("RELAY_PUBLISH_CEILING_KBPS")
+        # What OBS needs to know to publish here. The key is never part of it.
+        self.relay = {
+            "ingest_url": env_str("RELAY_INGEST_URL") or None,
+            "stream_key": "INGEST_KEY (batw STREAM_KEY_LIVE)",
+            "mode": env_str("RELAY_MODE") or "transcode",
+            "encoder": env_str("RELAY_ENCODER") or None,
+            "max_publish_kbps": int(ceiling) if ceiling.isdigit() else None,
+        }
         gap_log = os.path.join(self.record_dir, "ingest-gaps.log") if self.record_dir else ""
         self.watcher = IngestWatcher(self.api_url, self.ingest_path, gap_log)
 
@@ -236,6 +245,7 @@ class StatusApp:
         recording["file"] = (self.report("recorder") or {}).get("current_file")
         return {
             "generated_at": iso(now),
+            "relay": self.relay,
             "ingest": ingest,
             "outputs": [self.output_entry(n, snap, now) for n in self.outputs],
             "recording": recording,

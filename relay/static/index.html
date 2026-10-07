@@ -45,6 +45,12 @@
 <main>
   <h1>Stream relay</h1>
 
+  <section class="card">
+    <div><span class="muted">OBS publishes to</span> <code id="ingest-url" class="big">…</code></div>
+    <div class="muted">Stream key: <span id="stream-key"></span></div>
+    <div id="relay-mode"></div>
+  </section>
+
   <section class="card ingest">
     <span id="ingest-badge" class="badge s-unknown">…</span>
     <span id="ingest-text" class="big">Loading</span>
@@ -93,6 +99,20 @@
   }
 
   function render(s) {
+    const rel = s.relay || {};
+    document.getElementById("ingest-url").textContent = rel.ingest_url || "unknown";
+    document.getElementById("stream-key").textContent = rel.stream_key || "";
+    const mode = document.getElementById("relay-mode");
+    if (rel.mode === "copy") {
+      // A copy host forwards OBS's stream untouched: OBS sets every
+      // platform's bitrate, so the ceiling is the thing to get right.
+      mode.className = "warn";
+      mode.textContent = "Stream copy: no transcoding. Keep OBS under " +
+        (rel.max_publish_kbps ? rel.max_publish_kbps + " kbps" : "every platform's limit") + ".";
+    } else {
+      mode.className = "muted";
+      mode.textContent = "Transcodes per platform" + (rel.encoder ? " (" + rel.encoder + ")" : "") + ": send the full-quality master.";
+    }
     const ing = s.ingest;
     const ib = document.getElementById("ingest-badge");
     ib.className = "badge s-" + ing.state;

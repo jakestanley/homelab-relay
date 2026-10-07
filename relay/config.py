@@ -13,6 +13,7 @@ its service, and nothing changes under it until that service is restarted.
 
 import os
 import re
+import socket
 import sys
 
 import yaml
@@ -129,6 +130,10 @@ class Config:
             except ValueError:
                 self.problems.append("{} must be a non-negative number, not {!r}".format(name, value))
 
+        # The name OBS should publish to: this machine's own, never a status
+        # page vhost (those resolve to the nginx host, which is not where
+        # RTMP is). Shown on the status page.
+        self.ingest_host = env.get("RELAY_INGEST_HOST", "").strip() or socket.getfqdn().lower()
         self.video_encoder = env.get("VIDEO_ENCODER", "").strip() or "h264_nvenc"
         if self.video_encoder not in VIDEO_ENCODERS:
             self.problems.append(
@@ -309,9 +314,26 @@ class Config:
         )
         return env
 
+    def ingest_url(self):
+        """Where OBS publishes, without the key (the key is the stream key)."""
+        return "rtmp://{}:{}/live".format(self.ingest_host, self.rtmp_port)
+
+    def publish_ceiling_kbps(self):
+        """On a copy host OBS sets every platform's bitrate: the lowest
+        max_kbps of the outputs is what it must stay under. None otherwise."""
+        if not self.host_copies:
+            return None
+        ceilings = [o["max_kbps"] for o in self.outputs if o.get("max_kbps")]
+        return min(ceilings) if ceilings else None
+
     def status_env(self):
         # Never given a platform key, so no endpoint behind it can expose one.
+        ceiling = self.publish_ceiling_kbps()
         return {
+            "RELAY_INGEST_URL": self.ingest_url(),
+            "RELAY_MODE": "copy" if self.host_copies else "transcode",
+            "RELAY_ENCODER": self.video_encoder,
+            "RELAY_PUBLISH_CEILING_KBPS": str(ceiling) if ceiling else "",
             "SERVICE_PORT": str(self.service_port),
             "RELAY_API_URL": "http://127.0.0.1:{}".format(self.api_port),
             "RELAY_INGEST_PATH": self.ingest_path,
@@ -403,9 +425,17 @@ def main(argv=None):
     return 0
 
 
+def ingest_lines(config):
+    lines = ["ingest     {}  (stream key: INGEST_KEY = batw STREAM_KEY_LIVE)".format(config.ingest_url())]
+    ceiling = config.publish_ceiling_kbps()
+    lines.append("mode       copy: OBS must stay under {} kbps".format(ceiling) if ceiling
+                 else "mode       {}".format("copy" if config.host_copies else "transcode ({})".format(config.video_encoder)))
+    return lines
+
+
 def summary(config):
     """Which outputs are enabled and what each is sent; never a key."""
-    lines = []
+    lines = ingest_lines(config)
     for o in config.outputs:
         env = config.output_env(o)
         enabled = env["OUTPUT_URL"] and (env["OUTPUT_KEY"] or env["OUTPUT_KEY_REQUIRED"] == "false")
