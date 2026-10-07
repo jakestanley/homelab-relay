@@ -38,6 +38,7 @@ from relay.common import (
     fetch_ingest,
     join_destination,
     key_secrets,
+    read_armed,
     redact,
     setup_logging,
     write_json_atomic,
@@ -209,6 +210,7 @@ class Wrapper:
         ingest_key = self.ingest_path.rsplit("/", 1)[-1]
         self.secrets = key_secrets(self.key) + [ingest_key]
         self.report_path = os.path.join(self.state_dir, self.name + ".json")
+        self.disarmed_stop = False
 
         self.phase = "starting"
         self.runs = 0
@@ -301,9 +303,18 @@ class Wrapper:
             self.phase = "waiting"
             if not self.wait_for_ingest():
                 return
+            if not self.armed():
+                # Record only: ingest is live but the go-live switch is off.
+                # Wait here, not in ffmpeg, so arming starts a push at once.
+                self.standby()
+                continue
             delivered_for = self.run_ffmpeg()
             if stop_event.is_set():
                 return
+            if self.disarmed_stop:
+                self.log.info("output %s stopped: switched to record only", self.name)
+                failures = 0
+                continue
 
             if fetch_ingest(self.api_url, self.ingest_path):
                 # Ingest is still live, so this output failed on its own.
@@ -321,6 +332,20 @@ class Wrapper:
             else:
                 failures = 0
                 self.log.info("output %s stopped: ingest ended; waiting for ingest", self.name)
+
+    def armed(self):
+        """Whether this output may push. The recorder always may."""
+        if self.kind == "record":
+            return True
+        armed, _ = read_armed(self.state_dir)
+        return armed
+
+    def standby(self):
+        if self.phase != "standby":
+            self.log.info("output %s on standby: record only, not pushing until armed", self.name)
+        self.phase = "standby"
+        self.write_report()
+        stop_event.wait(POLL_SECONDS)
 
     def wait_for_ingest(self):
         while not stop_event.is_set():
@@ -464,9 +489,13 @@ class Wrapper:
             t.start()
 
         watchdog_reason = None
+        self.disarmed_stop = False
         while proc.poll() is None:
             self.write_report()
             if stop_event.is_set():
+                break
+            if not self.armed():
+                self.disarmed_stop = True
                 break
             watchdog_reason = self._watchdog()
             if watchdog_reason:
@@ -492,7 +521,10 @@ class Wrapper:
         delivered_for = (
             (self.last_progress - first_progress) if first_progress and self.last_progress else 0.0
         )
-        reason = watchdog_reason or self.last_error or "ffmpeg exited with code {}".format(proc.returncode)
+        if self.disarmed_stop:
+            reason = "switched to record only"
+        else:
+            reason = watchdog_reason or self.last_error or "ffmpeg exited with code {}".format(proc.returncode)
         self.last_exit = {"at": time.time(), "code": proc.returncode, "reason": reason}
         self.phase = "waiting"
         self.run_started = None

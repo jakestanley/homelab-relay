@@ -145,3 +145,46 @@ def fetch_ingest(api_url, ingest_path, timeout=2.0):
         if item.get("name") == ingest_path:
             return item if item.get("ready") else {}
     return {}
+
+
+# -- the go-live switch ----------------------------------------------------
+#
+# One switch for every push output: armed, they push to their platforms;
+# not armed ("record only"), they wait in standby and only the recorder
+# runs. The status page writes it; the output wrappers read it every poll.
+# It counts only if set since this boot, so a reboot always comes back
+# record only, while a crashed or redeployed service keeps it as it was.
+
+ARMED_FILE = "armed.json"
+
+
+def boot_time():
+    """When this machine booted (epoch seconds), or 0 if unknown."""
+    if os.name == "nt":
+        import ctypes
+
+        get_tick = ctypes.windll.kernel32.GetTickCount64
+        get_tick.restype = ctypes.c_ulonglong
+        return time.time() - get_tick() / 1000.0
+    try:
+        with open("/proc/stat", encoding="ascii") as fh:
+            for line in fh:
+                if line.startswith("btime "):
+                    return float(line.split()[1])
+    except OSError:
+        pass
+    return 0.0
+
+
+def read_armed(state_dir, booted=None):
+    """(armed, since): armed only if switched on since this boot."""
+    doc = read_json(os.path.join(state_dir, ARMED_FILE)) or {}
+    at = doc.get("at") if isinstance(doc.get("at"), (int, float)) else 0
+    booted = boot_time() if booted is None else booted
+    if doc.get("armed") is True and at > booted:
+        return True, at
+    return False, at if at > booted else None
+
+
+def write_armed(state_dir, armed):
+    write_json_atomic(os.path.join(state_dir, ARMED_FILE), {"armed": bool(armed), "at": time.time()})

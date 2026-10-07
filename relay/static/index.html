@@ -35,7 +35,16 @@
   .s-connected, .s-live, .s-recording { background: var(--ok); }
   .s-connecting { background: var(--warn); }
   .s-failed, .s-unknown, .s-unreachable { background: var(--bad); }
-  .s-idle, .s-no_ingest { background: var(--idle); }
+  .s-idle, .s-no_ingest, .s-standby { background: var(--idle); }
+  .switch { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .switch.on { border-color: var(--bad); box-shadow: inset 6px 0 0 var(--bad); }
+  .switch.off { box-shadow: inset 6px 0 0 var(--idle); }
+  .switch .state { font-size: 26px; font-weight: 750; letter-spacing: .02em; }
+  .switch.on .state { color: var(--bad); }
+  .switch button { font: inherit; font-weight: 650; padding: 10px 16px; border-radius: 8px;
+                   border: 1px solid var(--line); background: var(--card); color: var(--fg); cursor: pointer; }
+  .switch.off button { background: var(--bad); border-color: var(--bad); color: #fff; }
+  .switch button:disabled { opacity: .5; cursor: wait; }
   .s-disabled, .s-stopped { background: var(--off); }
   .warn { color: var(--bad); font-weight: 600; }
   @media (max-width: 560px) { td.dest, th.dest { display: none; } }
@@ -44,6 +53,14 @@
 <body>
 <main>
   <h1>Stream relay</h1>
+
+  <section id="switch" class="card switch off">
+    <div>
+      <div id="switch-state" class="state">…</div>
+      <div id="switch-detail" class="muted"></div>
+    </div>
+    <button id="switch-button" type="button" disabled>…</button>
+  </section>
 
   <section class="card">
     <div><span class="muted">OBS publishes to</span> <code id="ingest-url" class="big">…</code></div>
@@ -98,7 +115,41 @@
     return tr;
   }
 
+  let armed = null;
+  function renderSwitch(sw) {
+    armed = !!(sw && sw.armed);
+    document.getElementById("switch").className = "card switch " + (armed ? "on" : "off");
+    document.getElementById("switch-state").textContent = armed ? "LIVE" : "RECORDING ONLY";
+    document.getElementById("switch-detail").textContent =
+      (sw ? sw.detail : "") + (sw && sw.since ? " · since " + sw.since : "") +
+      (armed ? "" : " · resets to record only on reboot");
+    const b = document.getElementById("switch-button");
+    b.textContent = armed ? "Switch to record only" : "Go live";
+    b.disabled = false;
+  }
+
+  async function flip() {
+    const want = !armed;
+    if (want && !confirm("Go live? Every enabled platform starts receiving the stream.")) return;
+    if (!want && !confirm("Switch to record only? Every platform stops; recording continues.")) return;
+    const b = document.getElementById("switch-button");
+    b.disabled = true;
+    try {
+      const res = await fetch("api/live", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ armed: want }),
+      });
+      if (!res.ok) throw new Error((await res.json()).message || res.status);
+      renderSwitch(await res.json());
+    } catch (e) {
+      alert("The switch did not change: " + e.message);
+      b.disabled = false;
+    }
+  }
+  document.getElementById("switch-button").addEventListener("click", flip);
+
   function render(s) {
+    renderSwitch(s.live_switch);
     const rel = s.relay || {};
     document.getElementById("ingest-url").textContent = rel.ingest_url || "unknown";
     document.getElementById("stream-key").textContent = rel.stream_key || "";

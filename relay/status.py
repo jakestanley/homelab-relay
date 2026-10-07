@@ -16,7 +16,7 @@ import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from relay.common import env_float, env_str, fetch_ingest, read_json, setup_logging
+from relay.common import env_float, env_str, fetch_ingest, read_armed, read_json, write_armed, setup_logging
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(HERE, "static")
@@ -44,8 +44,8 @@ def derive_output_state(report, ingest_live, ingest_since, now):
     whatever its process is doing. The page is mostly read before a
     broadcast, when idling is normal, and must not report it as failure.
 
-    Returns (state, detail). States: stopped, disabled, idle, connecting,
-    connected, failed, unknown.
+    Returns (state, detail). States: stopped, disabled, idle, standby,
+    connecting, connected, failed, unknown.
     """
     if report is not None and report.get("phase") == "stopped":
         # The wrapper's last word on a deliberate stop. Checked before the
@@ -61,6 +61,9 @@ def derive_output_state(report, ingest_live, ingest_since, now):
 
     if not ingest_live:
         return "idle", "waiting for ingest"
+
+    if report.get("phase") == "standby":
+        return "standby", "record only: not pushing until the relay is switched live"
 
     last_progress = report.get("last_progress")
     if report.get("phase") == "running" and last_progress and now - last_progress <= PROGRESS_WINDOW_SECONDS:
@@ -184,6 +187,19 @@ class StatusApp:
         gap_log = os.path.join(self.record_dir, "ingest-gaps.log") if self.record_dir else ""
         self.watcher = IngestWatcher(self.api_url, self.ingest_path, gap_log)
 
+    def live_switch(self):
+        armed, since = read_armed(self.state_dir)
+        return {
+            "armed": armed,
+            "since": iso(since) if since else None,
+            "detail": "live: pushing to platforms" if armed else "record only: platforms on standby",
+        }
+
+    def set_live(self, armed):
+        write_armed(self.state_dir, armed)
+        log.warning("go-live switch set to %s", "LIVE" if armed else "RECORD ONLY")
+        return self.live_switch()
+
     def report(self, name):
         return read_json(os.path.join(self.state_dir, name + ".json"))
 
@@ -246,6 +262,7 @@ class StatusApp:
         return {
             "generated_at": iso(now),
             "relay": self.relay,
+            "live_switch": self.live_switch(),
             "ingest": ingest,
             "outputs": [self.output_entry(n, snap, now) for n in self.outputs],
             "recording": recording,
@@ -304,10 +321,34 @@ def make_handler(app):
                 log.exception("error serving %s", path)
                 self.send_json(500, {"error": "internal_error", "message": "internal error"})
 
-        def reject(self):
-            self.send_json(405, {"error": "method_not_allowed", "message": "this API is read-only"})
+        def do_POST(self):
+            # The one mutating endpoint: the go-live switch. JSON only, so a
+            # page on another site cannot submit it from a LAN browser with
+            # a plain form (a cross-origin JSON POST needs a CORS preflight,
+            # which this server never grants).
+            path = self.path.split("?", 1)[0].rstrip("/")
+            if path != "/api/live":
+                return self.reject()
+            ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            if ctype != "application/json":
+                return self.send_json(415, {"error": "unsupported_media_type", "message": "send application/json"})
+            try:
+                length = min(int(self.headers.get("Content-Length") or 0), 1024)
+                body = json.loads(self.rfile.read(length) or b"{}")
+            except (ValueError, OSError):
+                return self.send_json(400, {"error": "bad_request", "message": "body must be JSON"})
+            if not isinstance(body, dict) or not isinstance(body.get("armed"), bool):
+                return self.send_json(400, {"error": "bad_request", "message": 'send {"armed": true} or {"armed": false}'})
+            try:
+                self.send_json(200, app.set_live(body["armed"]))
+            except OSError:
+                log.exception("could not write the go-live switch")
+                self.send_json(500, {"error": "internal_error", "message": "could not save the switch"})
 
-        do_POST = do_PUT = do_PATCH = do_DELETE = reject
+        def reject(self):
+            self.send_json(405, {"error": "method_not_allowed", "message": "only POST /api/live changes anything"})
+
+        do_PUT = do_PATCH = do_DELETE = reject
 
     return Handler
 

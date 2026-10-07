@@ -33,7 +33,15 @@ start, restart after a crash) is not covered: the harness stands in for NSSM.
 
 ## Record
 
-### 2026-10-06: `test/acceptance.py`, both platforms (current)
+### 2026-10-07: go-live switch
+
+New checks: record only on first ingest (recorder records, every push
+output on standby, 0 runs), go live (sinks connect), back to record only
+mid-stream (standby, not failed, recording continues), and live again.
+All pass on shrike (h264_nvenc, full size; sinks connected 9.1 s after the
+switch) and on adler (copy and libx264, `--small`). Unit tests: 85 pass.
+
+### 2026-10-06: `test/acceptance.py`, both platforms
 
 Replaces `test/acceptance.sh` (bash and Docker, adler only), which was
 removed with the move to one layout for both hosts.

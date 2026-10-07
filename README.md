@@ -90,6 +90,23 @@ that is the adler fallback, the same checkout of `main` as shrike, with no
 encoder in the path and OBS setting every platform's bitrate (`up` prints each
 output's `max_kbps` as a reminder). The recorder always copies.
 
+### Go live or record only
+
+The status page has one switch for every push output. **Record only** (the
+default) records ingest and keeps every platform output on *standby*:
+nothing reaches a platform. **Go live** starts every enabled output, within
+a few seconds (about 9 s on shrike, where NVENC has to start). Switching back
+to record only mid-stream stops the pushes cleanly, as *standby* rather than
+*failed*, while recording carries on.
+
+It is the page's only control (`POST /api/live`, `{"armed": true|false}`,
+JSON only so a plain cross-site form cannot set it), stored as `armed.json` in
+the state directory. A reboot always comes back record only. A crashed or
+redeployed service keeps the switch as it was, so a status-page restart
+mid-show cannot take you off air. This replaces the spec's "read-only status
+page" non-goal (decided 2026-10-07). Per-platform on/off is still a matter of
+clearing a key.
+
 ### When ingest drops
 
 When OBS disconnects, every output drops too, and viewers see the stream stop.

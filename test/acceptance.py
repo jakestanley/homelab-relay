@@ -267,6 +267,17 @@ class Run:
     def states(self, *names):
         return " ".join("{}={}".format(n, self.state(n)) for n in names)
 
+    def set_live(self, armed):
+        """Flip the go-live switch through the status page, as the page does."""
+        req = urllib.request.Request(
+            "http://127.0.0.1:{}/api/live".format(HTTP_PORT),
+            data=json.dumps({"armed": armed}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return json.load(resp)
+
     def wait_for(self, seconds, predicate):
         """Seconds taken, or None on timeout."""
         t0 = time.monotonic()
@@ -426,11 +437,25 @@ def run_checks(r):
     errs = [line for line in r.procs["mediamtx"].log().splitlines() if " ERR " in line]
     r.check(not errs, "idle: no ERR lines in the mediamtx log", "{} ERR lines".format(len(errs)))
 
-    # -- go-live ------------------------------------------------------------------
+    # -- record only, then go live --------------------------------------------------
+    # The switch starts on record only: ingest arrives, the recorder records,
+    # and no push output starts.
+    pushes = ("twitch", "youtube", "sink-a", "sink-b")
     r.publish()
-    t = r.wait_for(30, r.connected("sink-a", "sink-b", "recorder"))
-    r.check(t is not None, "go-live after {}s idle: sinks and recorder connected".format(a.idle),
-            "{}s from publisher start".format(t) if t else r.states("sink-a", "sink-b", "recorder"))
+    t = r.wait_for(30, r.connected("recorder"))
+    r.check(t is not None, "record only: recorder records when ingest arrives",
+            "{}s from publisher start".format(t) if t else r.states("recorder"))
+    time.sleep(4)
+    got = r.states(*pushes)
+    sent = sum(r.output(n).get("runs", 0) for n in pushes)
+    r.check(all(r.state(n) == "standby" for n in pushes) and sent == 0,
+            "record only: every push output on standby, none started", "{}; {} runs".format(got, sent))
+
+    switched = r.set_live(True)
+    t = r.wait_for(30, r.connected("sink-a", "sink-b"))
+    r.check(switched.get("armed") is True and t is not None,
+            "go live (switch on, after {}s idle): sinks connected".format(a.idle),
+            "{}s from the switch".format(t) if t else r.states("sink-a", "sink-b"))
     time.sleep(3)
 
     # -- renditions -------------------------------------------------------------
@@ -564,6 +589,21 @@ def run_checks(r):
     r.procs["recorder"].start()  # what NSSM does after a crash
     t = r.wait_for(30, lambda: len([f for f in os.listdir(r.rec) if f.endswith(".ts")]) > n)
     r.check(t is not None, "restarted recorder writes a new file", "{}s after restart (by the harness, standing in for NSSM)".format(t))
+
+    # -- back to record only, mid-stream ------------------------------------------------
+    rec0 = r.output("recorder").get("bytes", 0)
+    r.set_live(False)
+    t = r.wait_for(15, lambda: all(r.state(n) == "standby" for n in ("sink-a", "sink-b")))
+    time.sleep(3)
+    rec1 = r.output("recorder").get("bytes", 0)
+    stopped_on_purpose = all((r.output(n).get("last_exit") or {}).get("reason") == "switched to record only"
+                             for n in ("sink-a", "sink-b"))
+    r.check(t is not None and stopped_on_purpose and r.state("ingest") == "live" and rec1 > rec0,
+            "switch to record only mid-stream: pushes stop as standby (not failed), recording continues",
+            "{}s; {}; recorder {} -> {} bytes".format(t, r.states("sink-a", "sink-b"), rec0, rec1))
+    r.set_live(True)
+    t = r.wait_for(30, r.connected("sink-a", "sink-b"))
+    r.check(t is not None, "switch back to live: sinks reconnect", "{}s".format(t) if t else r.states("sink-a", "sink-b"))
 
     # -- keys never leak --------------------------------------------------------------
     leaks = [name for name, p in r.procs.items()

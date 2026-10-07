@@ -76,6 +76,41 @@
           }
         }
       }
+    },
+    "/api/live": {
+      "post": {
+        "summary": "Set the go-live switch",
+        "description": "The only mutating endpoint. Content-Type must be application/json, so a plain cross-site form cannot submit it.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "armed"
+                ],
+                "properties": {
+                  "armed": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The switch as now set (same shape as live_switch)."
+          },
+          "400": {
+            "description": "Body is not {\"armed\": bool}."
+          },
+          "415": {
+            "description": "Not application/json."
+          }
+        }
+      }
     }
   },
   "components": {
@@ -128,12 +163,13 @@
               "stopped",
               "disabled",
               "idle",
+              "standby",
               "connecting",
               "connected",
               "failed",
               "unknown"
             ],
-            "description": "stopped: the output's service or container was stopped on purpose. disabled: URL empty or named key empty. idle: no ingest, nothing to push. connecting: push started, no data yet. connected: byte counter advancing. failed: ingest live but this output is not delivering. unknown: output process not reporting while there is no ingest."
+            "description": "stopped: the output's service or container was stopped on purpose. disabled: URL empty or named key empty. idle: no ingest, nothing to push. standby: ingest live, but the go-live switch is on record only. connecting: push started, no data yet. connected: byte counter advancing. failed: ingest live but this output is not delivering. unknown: output process not reporting while there is no ingest."
           },
           "detail": {
             "type": "string"
@@ -333,6 +369,25 @@
                   "null"
                 ],
                 "description": "copy mode only: the lowest platform ceiling, which OBS must stay under."
+              }
+            }
+          },
+          "live_switch": {
+            "type": "object",
+            "description": "The go-live switch. Not armed (record only): push outputs wait in standby and only the recorder runs. Resets to record only on reboot.",
+            "properties": {
+              "armed": {
+                "type": "boolean"
+              },
+              "since": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "When it was last set, if since this boot."
+              },
+              "detail": {
+                "type": "string"
               }
             }
           }
