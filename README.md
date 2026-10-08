@@ -286,6 +286,26 @@ SINK_B_TLS_VERIFY=false     # self-signed; permitted for a test sink only
 
 Clear both URLs before a real broadcast.
 
+## Roadmap
+
+Open questions and deferred work, kept off the critical path. Add as the need
+arises, not pre-emptively.
+
+### Question: 44.1 kHz or 48 kHz from OBS?
+
+The first practice through shrike (2026-10-07) archived **44.1 kHz** stereo
+AAC: OBS (or Ableton behind it) runs at 44.1 kHz. The relay handles either.
+The archive is a copy, so it keeps whatever OBS sends, and every
+transcoded rendition is resampled to 48 kHz (`-ar 48000` in
+`relay/output.py`), which is what the platforms expect. In copy mode (the
+adler fallback) the platforms get 44.1 kHz as sent.
+
+Undecided: whether the show should run at 48 kHz end to end (an OBS setting,
+Settings > Audio > Sample Rate, and possibly Ableton's), or stay at 44.1 kHz.
+Either way, `test/acceptance.py`'s full-size publisher sends 48 kHz and
+should match whatever is chosen, so the archive check tests what the show
+actually sends.
+
 ## Deviations from homelab-standards
 
 1. **The relay itself is not Python.** It is MediaMTX plus ffmpeg under
